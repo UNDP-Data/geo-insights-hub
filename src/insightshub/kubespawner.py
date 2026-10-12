@@ -1,4 +1,3 @@
-import os
 import uuid
 import yaml
 from kubernetes import client, config, utils
@@ -10,32 +9,10 @@ import functools
 from insightshub.config import settings
 from insightshub.auth import User
 from urllib.parse import urlparse
-import base64
 logger = logging.getLogger(__name__)
 
 
-def get_hub_secret_env(
-    core_v1: client.CoreV1Api = None,
-    secret_name: str = "hub-env",
-    secret_namespace: str = "hub",
-) -> dict[str, str]:
-    """Reads a Secret from the hub namespace and decodes all keys into a dict."""
-    if core_v1 is None:
-        core_v1 = client.CoreV1Api()
 
-    try:
-        secret = core_v1.read_namespaced_secret(name=secret_name, namespace=secret_namespace)
-        if not secret.data:
-            logger.info('NO Data FROM SECRET')
-            return {}
-
-        return {
-            key: base64.b64decode(val).decode("utf-8")
-            for key, val in secret.data.items()
-        }
-    except Exception as e:
-        logger.warning(f"Could not read Secret '{secret_name}' in namespace '{secret_namespace}': {e}")
-        return {}
 
 def spawn_marimo_session(
     notebook_path: str,
@@ -45,6 +22,7 @@ def spawn_marimo_session(
     parent_url: str = None,
 ):
     repo_url = f"https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}"
+    internal_hub_url = "http://insights-hub-svc.hub.svc.cluster.local"
 
     config.load_incluster_config()
     k8s_client = client.ApiClient()
@@ -159,23 +137,27 @@ def spawn_marimo_session(
 
     if mode == "edit":
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [
-            "marimo", "edit", f"/workspace/{notebook_path}",
+            "python3","-m", "marimohub.mrun", "edit", f"/workspace/{notebook_path}",
             "--host", "0.0.0.0", "--port", "8080", "--headless", "--no-token"
         ]
         # 1. Base session and Git identity variables
         session_env_vars = [
             {"name": "SESSION_ID", "value": session_id},
+            {"name": "BRANCH_NAME", "value": session_id},
+            {"name": "BASE_BRANCH", "value": "main"},
             {"name": "NOTEBOOK_REL_PATH", "value": notebook_path},
             {"name": "PARENT_HUB_URL", "value": parent_url_str},
-            # Standard Git CLI environment variables
+            {"name": "HUB_CALLBACK_URL", "value": f"{internal_hub_url}/api/sessions"},
+            # Standard Git CLI identity
             {"name": "GIT_AUTHOR_NAME", "value": str(user.name)},
             {"name": "GIT_AUTHOR_EMAIL", "value": str(user.email)},
             {"name": "GIT_COMMITTER_NAME", "value": str(user.name)},
             {"name": "GIT_COMMITTER_EMAIL", "value": str(user.email)},
+            # Clean, quote-stripped GitHub credentials from Pydantic settings
+            {"name": "NB_GITHUB_TOKEN", "value": settings.nb_github_token},
+            {"name": "NB_GITHUB_REPO", "value": settings.nb_github_repo},
         ]
-        default_envs = get_hub_secret_env()
-        for en, ev in default_envs.items():
-            session_env_vars.append( {"name":en, "value":ev})
+
 
 
         job_dict["spec"]["template"]["spec"]["containers"][0]["env"] = session_env_vars

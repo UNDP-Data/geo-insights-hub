@@ -8,7 +8,7 @@ from nicegui import app as nicegui_app
 from nicegui import ui
 from insightshub.config import settings
 from insightshub import pages
-import asyncio
+from kubernetes import client
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("nicegui").setLevel(logging.WARNING)
@@ -49,6 +49,23 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
+
+
+@app.delete("/api/sessions/{session_id}")
+async def terminate_session(session_id: str):
+    """Deletes the Marimo Job, triggering cascading cleanup of Service and Route."""
+    batch_v1 = client.BatchV1Api()
+    try:
+        batch_v1.delete_namespaced_job(
+            name=f"marimo-edit-{session_id}",
+            namespace="marimo",
+            propagation_policy="Foreground",
+        )
+        return {"status": "deleted"}
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            return {"status": "already_deleted"}
+        raise
 
 nicegui_app.add_static_files("/static", STATIC_DIR)
 
