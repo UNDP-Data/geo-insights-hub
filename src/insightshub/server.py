@@ -52,7 +52,6 @@ async def health() -> dict[str, str]:
 
 nicegui_app.add_static_files("/static", STATIC_DIR)
 
-#ui.run(fastapi_app=app, title='Dev test server')
 ui.run_with(
     app,
     title=settings.app_name,

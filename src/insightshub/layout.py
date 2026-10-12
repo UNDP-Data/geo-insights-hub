@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
+
 UNDP_BLUE = "#006eb5"
 UNDP_RED = "#d12800"
 STATIC_DIR = Path(__file__).parent / "static"

@@ -24,7 +24,7 @@ os.environ['NOTEBOOKS_DIR'] = str(NOTEBOOKS_DIR)
 
 
 @ui.page("/")
-@ui.page('/notebooks/{subpath:path}')
+@ui.page('/apps/{subpath:path}')
 async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
     async with (standard_page(title="Apps", request=request, response=response) as user):
@@ -54,12 +54,12 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
             if subpath:
                 parent_path = Path(subpath).parent
                 # Navigate back: if parent is '.', go to root '/'
-                back_url = '/' if str(parent_path) == '.' else f'/notebooks/{parent_path}'
+                back_url = '/' if str(parent_path) == '.' else f'/apps/{parent_path}'
 
                 with ui.row().classes('items-center mb-6 cursor-pointer group').on('click',
                                                                                    lambda: ui.navigate.to(back_url)):
                     ui.icon('arrow_back', color='[#006db0]').classes('group-hover:-translate-x-1 transition-transform')
-                    ui.label(f"Back to {parent_path if str(parent_path) != '.' else 'Root'}").classes(
+                    ui.label(f"Back to {parent_path if str(parent_path) != '.' else 'Apps'}").classes(
                         'text-[#006db0] font-bold text-xs tracking-widest uppercase')
             # 4. The Grid
             with ui.grid(columns='1fr 1fr 1fr').classes('w-full gap-10 items-stretch'):
@@ -84,7 +84,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                         with ui.column().classes(
                                 'w-full border-t-2 border-black p-6 flex flex-col justify-between h-full '
                                 'bg-white hover:bg-[#006eb5] transition-all duration-200 cursor-pointer group hover:scale-102 transition'
-                        ).on('click', lambda p=rel_path: ui.navigate.to(f'/notebooks/{p}')):
+                        ).on('click', lambda p=rel_path: ui.navigate.to(f'/apps/{p}')):
 
                             with ui.column().classes('w-full gap-4'):
                                 # 1. Content Tag
@@ -101,7 +101,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
                             # 4. CTA Link
                             with ui.row().classes('items-center gap-1.5 mt-8'):
-                                ui.link('Explore', f'/notebooks/{rel_path}').classes("undp-cta-link")
+                                ui.link('Explore', f'/apps/{rel_path}').classes("undp-cta-link")
 
                     # ==========================================
                     # NOTEBOOK / ARTICLE CARD
@@ -337,10 +337,14 @@ async def session_manager(request: Request, response: Response) -> None:
 
                             # Left: Status indicator & details
                             with ui.row().classes('items-center gap-0 w-2/3'):
-                                ui.element('div').classes(f'w-2 h-20 {status_color}')
+                                ui.element('div').classes(f'w-5 h-20 {status_color}')
 
                                 with ui.row().classes('items-center gap-4 pl-4 py-2'):
-                                    ui.icon('cloud', color='primary').classes('text-2xl opacity-80')
+                                    ui.icon('description', color='secondary').classes('text-2xl opacity-80').tooltip('Notebook')
+
+                                    ui.icon(f'{"web" if s.session_type == "run" else "edit_note"}', color='primary').classes('text-2xl opacity-80').props('size="lg"') \
+                                    .tooltip(f'{s.session_type.capitalize()} mode')
+
 
                                     with ui.column().classes('gap-0'):
                                         ui.label(s.notebook_path).classes('font-bold text-base text-gray-800')
@@ -348,8 +352,12 @@ async def session_manager(request: Request, response: Response) -> None:
                                         with ui.row().classes('gap-3 items-center mt-1'):
                                             ui.label(f"ID: {s.session_id}").classes(
                                                 'text-xs text-gray-500 font-mono bg-gray-100 px-2 py-0.5 rounded')
-                                            ui.label(f"Status: {s.status}").classes(
-                                                f'text-xs font-bold {"text-emerald-600" if s.status == "Running" else "text-amber-600"}')
+                                            # ui.label(f"Status: {s.status}").classes(
+                                            #     f'text-xs font-bold {"text-emerald-600" if s.status == "Running" else "text-amber-600"}')
+                                            ui.label('Status:').classes('text-xs font-bold').tooltip(s.status)
+                                            ui.spinner(size='xs') if s.status == 'Running' else ui.icon('block', color='secondary', size='xs')
+
+
                                             if s.created_at:
                                                 ui.label(s.created_at.strftime("%H:%M:%S")).classes(
                                                     'text-xs text-gray-400')
@@ -357,7 +365,7 @@ async def session_manager(request: Request, response: Response) -> None:
                             # Right: Actions
                             with ui.row().classes('items-center gap-2 pr-6'):
                                 # Join Button (Enabled only if Running)
-                                join_btn = ui.button('Join', icon='open_in_new',
+                                join_btn = ui.button('Open', icon='open_in_new',
                                                      on_click=lambda url=s.url: ui.navigate.to(url, new_tab=True)) \
                                     .props('flat color=primary').classes('font-bold tracking-wider')
 

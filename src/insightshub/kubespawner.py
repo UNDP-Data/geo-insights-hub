@@ -228,6 +228,11 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "
         with ui.row().classes('items-center gap-4 mb-2'):
             spinner = ui.spinner('dots', size='lg', color='primary')
             status_label = ui.label("Provisioning Kubernetes resources...").classes('text-gray-600')
+        with ui.row().classes('w-full justify-end gap-2'):
+            # The direct link button to open the tab:
+            open_link = ui.link('Open Session', '#', new_tab=True).classes(
+                'hidden undp-btn--small primary text-white px-4 py-2 rounded no-underline font-medium'
+            )
 
         close_btn = ui.button('Close', on_click=dialog.close).classes('mt-4 hidden')
 
@@ -259,12 +264,12 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "
             if status == "Ready":
                 status_label.set_text("Environment ready! Routing traffic...")
                 spinner.classes('hidden')  # Hide spinner
-                ui.icon('check_circle', color='green', size='lg')  # Show success icon
-
                 # Give the Ingress Controller 1.5 seconds to register the new Service IP
                 await asyncio.sleep(1.5)
 
+                #ui.navigate.to(target_url, new_tab=True)
                 ui.navigate.to(target_url)
+                dialog.close()
                 return
 
             elif status == "Error":
