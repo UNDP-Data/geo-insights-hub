@@ -46,7 +46,6 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
             ui.notify("Directory not found", type='negative')
             return ui.navigate.to('/')
 
-        hostname = '.'.join(request.headers.get('host').split('.')[-2:])
 
         with ui.column().classes('w-full max-w-7xl mx-auto px-6 lg:px-8'):
 
@@ -107,8 +106,8 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                     # NOTEBOOK / ARTICLE CARD
                     # ==========================================
                     elif item.suffix == '.py':
-                        marimo_slug = str(rel_path).replace('.py', '').replace(os.sep, '/').strip('/')
-                        next_uri = f'/apps/{marimo_slug}'
+                        # marimo_slug = str(rel_path).replace('.py', '').replace(os.sep, '/').strip('/')
+                        # next_uri = f'/apps/{marimo_slug}'
                         descr = mu.get_global_metadata(str(item.absolute()))
 
                         with ui.column().classes(
@@ -137,8 +136,8 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                         on_click=lambda e, p=str(rel_path): handle_session_launch(
                                             notebook_path=p,
                                             mode="run",
-                                            user_email=user.email,
-                                            hostname=hostname
+                                            user=user,
+                                            parent_url=request.url
                                         )
                                     ).classes('undp-btn--small primary text-white flex-1 w-1/2 capitalize') \
                                         .tooltip(f'View as interactive app')
@@ -150,8 +149,8 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                         on_click=lambda e, p=str(rel_path): handle_session_launch(
                                             notebook_path=p,
                                             mode="edit",
-                                            user_email=user.email,
-                                            hostname=hostname
+                                            user=user,
+                                            parent_url=request.url
                                         )
                                     ).classes('undp-btn--small secondary text-white flex-1 w-1/2 capitalize') \
                                         .tooltip(
@@ -165,8 +164,8 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                         on_click=lambda e, p=str(rel_path): handle_session_launch(
                                             notebook_path=p,
                                             mode="run",
-                                            user_email=user.email,
-                                            hostname=hostname
+                                            user=user,
+                                            parent_url=request.url
                                         )
                                     ).classes('undp-btn--small primary text-white flex-1 w-1/2 capitalize') \
                                         .tooltip(f'View as interactive app')
@@ -288,8 +287,10 @@ async def session_manager(request: Request, response: Response) -> None:
 
                 with ui.row().classes('items-center gap-2'):
                     ui.button(icon='refresh', on_click=lambda: refresh_list()) \
-                        .props('flat round color=primary') \
-                        .tooltip('Refresh Status')
+                        .props('flat round dense color=primary') \
+                        .tooltip('Refresh Status') \
+                        .classes(' rounded-full hover:scale-110 transition') \
+                        .style('border-radius: 50% !important; overflow: hidden;')
 
                     ui.button(icon='delete_forever', on_click=lambda: kill_all_sessions()) \
                         .props('flat round color=negative') \
@@ -355,11 +356,11 @@ async def session_manager(request: Request, response: Response) -> None:
                                             # ui.label(f"Status: {s.status}").classes(
                                             #     f'text-xs font-bold {"text-emerald-600" if s.status == "Running" else "text-amber-600"}')
                                             ui.label('Status:').classes('text-xs font-bold').tooltip(s.status)
-                                            ui.spinner(size='xs') if s.status == 'Running' else ui.icon('block', color='secondary', size='xs')
+                                            ui.spinner('dots', size='xs') if s.status == 'Running' else ui.icon('block', color='secondary', size='xs')
 
 
                                             if s.created_at:
-                                                ui.label(s.created_at.strftime("%H:%M:%S")).classes(
+                                                ui.label(f'Created at: {s.created_at.strftime("%Y-%m-%d %H:%M:%S")}').classes(
                                                     'text-xs text-gray-400')
 
                             # Right: Actions

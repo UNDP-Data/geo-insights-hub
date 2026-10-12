@@ -1,3 +1,4 @@
+import os
 import uuid
 import yaml
 from kubernetes import client, config, utils
@@ -7,16 +8,41 @@ import textwrap
 import logging
 import functools
 from insightshub.config import settings
-
-
+from insightshub.auth import User
+from urllib.parse import urlparse
+import base64
 logger = logging.getLogger(__name__)
+
+
+def get_hub_secret_env(
+    core_v1: client.CoreV1Api = None,
+    secret_name: str = "hub-env",
+    secret_namespace: str = "hub",
+) -> dict[str, str]:
+    """Reads a Secret from the hub namespace and decodes all keys into a dict."""
+    if core_v1 is None:
+        core_v1 = client.CoreV1Api()
+
+    try:
+        secret = core_v1.read_namespaced_secret(name=secret_name, namespace=secret_namespace)
+        if not secret.data:
+            logger.info('NO Data FROM SECRET')
+            return {}
+
+        return {
+            key: base64.b64decode(val).decode("utf-8")
+            for key, val in secret.data.items()
+        }
+    except Exception as e:
+        logger.warning(f"Could not read Secret '{secret_name}' in namespace '{secret_namespace}': {e}")
+        return {}
 
 def spawn_marimo_session(
     notebook_path: str,
     mode: str = "run",
     namespace: str = "marimo",
-    user_email: str = None,
-    hostname: str = None,
+    user: User = None,
+    parent_url: str = None,
 ):
     repo_url = f"https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}"
 
@@ -25,11 +51,17 @@ def spawn_marimo_session(
     batch_v1 = client.BatchV1Api(k8s_client)
     core_v1 = client.CoreV1Api(k8s_client)
     custom_api = client.CustomObjectsApi(k8s_client)
-
+    parent_url_str = str(parent_url)
+    parsed_url = urlparse(parent_url_str)
+    host = parsed_url.netloc
+    if '.' in host:
+        hostname = '.'.join(host.split('.')[-2:])
+    else:
+        hostname = host
     session_id = uuid.uuid4().hex[:8]
     resource_name = f"marimo-{mode}-{session_id}"
     session_hostname = f"{session_id}.{hostname}"
-    sanitized_email = user_email.replace("@", "-").replace(".", "-")
+    sanitized_email = user.email.replace("@", "-").replace(".", "-")
 
     yaml_template = textwrap.dedent(f"""\
     apiVersion: batch/v1
@@ -130,11 +162,24 @@ def spawn_marimo_session(
             "marimo", "edit", f"/workspace/{notebook_path}",
             "--host", "0.0.0.0", "--port", "8080", "--headless", "--no-token"
         ]
-        if user_email:
-            job_dict["spec"]["template"]["spec"]["containers"][0]["env"] = [
-                {"name": "GIT_AUTHOR_EMAIL", "value": user_email},
-                {"name": "GIT_AUTHOR_NAME", "value": user_email.split("@")[0]}
-            ]
+        # 1. Base session and Git identity variables
+        session_env_vars = [
+            {"name": "SESSION_ID", "value": session_id},
+            {"name": "NOTEBOOK_REL_PATH", "value": notebook_path},
+            {"name": "PARENT_HUB_URL", "value": parent_url_str},
+            # Standard Git CLI environment variables
+            {"name": "GIT_AUTHOR_NAME", "value": str(user.name)},
+            {"name": "GIT_AUTHOR_EMAIL", "value": str(user.email)},
+            {"name": "GIT_COMMITTER_NAME", "value": str(user.name)},
+            {"name": "GIT_COMMITTER_EMAIL", "value": str(user.email)},
+        ]
+        default_envs = get_hub_secret_env()
+        for en, ev in default_envs.items():
+            session_env_vars.append( {"name":en, "value":ev})
+
+
+        job_dict["spec"]["template"]["spec"]["containers"][0]["env"] = session_env_vars
+
     else:
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [
             "marimo", "run", f"/workspace/{notebook_path}",
@@ -215,8 +260,8 @@ def get_pod_status(session_id: str, namespace: str = "marimo") -> str:
 
 
 
-async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "marimo", user_email: str=None,
-                                hostname:str=None):
+async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "marimo", user:User=None,
+                                parent_url:str=None):
 
 
 
@@ -246,8 +291,8 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "
             spawn_marimo_session,
             notebook_path=notebook_path,
             mode=mode,
-            user_email=user_email,
-            hostname=hostname
+            user=user,
+            parent_url=parent_url
 
         )
 
