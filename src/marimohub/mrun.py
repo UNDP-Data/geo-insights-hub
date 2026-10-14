@@ -4,15 +4,15 @@ import json
 import logging
 import os
 import sys
+import subprocess
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-
 from marimohub import mgit
 
-logger = logging.getLogger("insights-hub.marimo-runner")
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 
 # --- Starlette Endpoint Handlers ---
@@ -143,11 +143,52 @@ def apply_marimo_patches():
 
 
 
+
+
+def install_notebook_deps(packages: list[str]):
+    """Installs the provided list of packages using uv."""
+    if not packages:
+        logger.info("No external packages to install.")
+        return
+
+    logger.info(f"Installing missing packages: {packages}")
+    for pkg_name in packages:
+        try:
+            subprocess.run(
+                ["uv", "pip", "install", pkg_name],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            logger.info(f"Successfully installed package: {pkg_name}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to install package '{pkg_name}': {e.stderr.strip()}")
+
 # --- Execution Entrypoint ---
 
 if __name__ == "__main__":
-    apply_marimo_patches()
-
-    # Pass execution directly to Marimo CLI
-    from marimo._cli.cli import main
-    main()
+    import os
+    name = os.path.basename(os.path.abspath(__file__))
+    logger = logging.getLogger(name)
+    if len(sys.argv) > 1:
+        command = sys.argv[1]
+        if command == "edit":
+            apply_marimo_patches()
+            from marimo._cli.cli import main
+            main()
+        elif command == "run":
+            notebook_path = sys.argv[2] if len(sys.argv) > 2 else ""
+            missing_pkgs_env = os.environ.get("MISSING_PACKAGES", "").strip()
+            logger.error(f'Attempting to install {missing_pkgs_env}')
+            if missing_pkgs_env:
+                pkg_list = [p.strip() for p in missing_pkgs_env.split(",") if p.strip()]
+                install_notebook_deps(pkg_list)
+            from marimo._cli.cli import main
+            main()
+        else:
+            logger.info("Error: accept only run or edit.")
+            sys.exit(1)
+    else:
+        logger.info("Error: accept only run or edit.")
+        sys.exit(1)

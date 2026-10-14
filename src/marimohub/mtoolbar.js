@@ -3,27 +3,6 @@
   if (window.__HUB_TOOLBAR_INITIALIZED__) return;
   window.__HUB_TOOLBAR_INITIALIZED__ = true;
 
-  // Poll for document body AND Marimo's core HTML elements
-  const initInterval = setInterval(() => {
-    // Find elements that guarantee Marimo's base HTML has loaded
-    const tokenEl = document.querySelector('marimo-server-token, meta[name="marimo-server-token"]');
-    const rootEl = document.getElementById('root');
-
-    // If either of these exist, the page is ready to be evaluated
-    if (document.body && (tokenEl || rootEl)) {
-      clearInterval(initInterval);
-
-      // Check if Marimo is specifically in run/read mode
-      const modeEl = document.querySelector('marimo-mode');
-      const isRunMode = modeEl && modeEl.getAttribute('data-mode') === 'read';
-
-      // Only initialize the toolbar if we are NOT in run mode
-      if (!isRunMode) {
-        initHubToolbar();
-      }
-    }
-  }, 100);
-
   let sessionData = {
     email: "Loading...",
     username: "",
@@ -31,41 +10,65 @@
     parent_hub_url: "/",
   };
 
-  async function initHubToolbar() {
+  // 1. Wait for the basic DOM to grab headers, then ping the backend
+  const startupInterval = setInterval(async () => {
+    if (!document.body) return;
+    clearInterval(startupInterval);
+
+    try {
+      // Since /hub/ routes are only patched in edit mode,
+      // this will return 404 in run mode and automatically fail safely.
+      const res = await fetch("/hub/session-info", { headers: getHubHeaders() });
+
+      if (!res.ok) {
+        console.log("[Insights Hub] Run mode detected (API inactive). Toolbar disabled.");
+        return;
+      }
+
+      // We are in Edit Mode! Save the data and wait for the app to finish loading
+      sessionData = await res.json();
+      waitForAppLoad();
+
+    } catch (err) {
+      console.warn("[Insights Hub] Network error determining mode. Toolbar disabled.", err);
+    }
+  }, 50);
+
+  // 2. Wait for Marimo's React app to mount before attaching our UI
+  function waitForAppLoad() {
+    const appInterval = setInterval(() => {
+      const rootEl = document.getElementById('root');
+      if (rootEl) {
+        clearInterval(appInterval);
+        initHubToolbar();
+      }
+    }, 100);
+  }
+
+  function initHubToolbar() {
     injectStyles();
     createToastContainer();
     const toolbar = renderToolbar();
     document.body.appendChild(toolbar);
-
-    // Fetch session details from Starlette /hub/session-info
-    try {
-      const res = await fetch("/hub/session-info");
-      if (res.ok) {
-        sessionData = await res.json();
-        updateToolbarInfo();
-      }
-    } catch (err) {
-      console.warn("[Hub Toolbar] Failed to fetch session info:", err);
-      document.getElementById("hub-user-pill-text").innerText = "Offline Session";
-    }
+    updateToolbarInfo();
   }
 
-    function getHubHeaders() {
-      const token =
-        document.querySelector('meta[name="marimo-server-token"]')?.getAttribute('content') ||
-        document.querySelector('marimo-server-token')?.getAttribute('data-token') ||
-        '';
+  function getHubHeaders() {
+    const token =
+      document.querySelector('meta[name="marimo-server-token"]')?.getAttribute('content') ||
+      document.querySelector('marimo-server-token')?.getAttribute('data-token') ||
+      '';
 
-      const headers = {
-        'Content-Type': 'application/json'
-      };
+    const headers = {
+      'Content-Type': 'application/json'
+    };
 
-      if (token) {
-        headers['Marimo-Server-Token'] = token;
-      }
-
-      return headers;
+    if (token) {
+      headers['Marimo-Server-Token'] = token;
     }
+
+    return headers;
+  }
 
   // --- UI Injection ---
 
@@ -92,11 +95,11 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
           Publish (PR)
         </button>
+
         <button id="hub-btn-merge" class="hub-btn hub-btn--success" title="Merge the open PR into main">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
           Merge
         </button>
-
 
         <button id="hub-btn-finish" class="hub-btn hub-btn--danger" title="Save and terminate notebook container">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
@@ -105,7 +108,6 @@
       </div>
     `;
 
-    // Attach listeners
     bar.querySelector("#hub-btn-commit").onclick = handleCommitClick;
     bar.querySelector("#hub-btn-publish").onclick = handlePublishClick;
     bar.querySelector("#hub-btn-merge").onclick = handleMergeClick;
@@ -178,10 +180,8 @@
 
       if (!res.ok) throw new Error(data.detail || "Failed to publish PR");
 
-      // Handle the new response statuses from your httpx backend
       if (data.status === "created") {
         showToast(`Draft PR #${data.pr_number} created!`, "success", 10000);
-
       } else if (data.status === "updated") {
         showToast(`Commits appended to existing PR #${data.pr_number}.`, "success", 6000);
       }
@@ -191,6 +191,7 @@
       setButtonLoading(btn, false, "Publish (PR)");
     }
   }
+
   async function handleMergeClick() {
     const confirmed = await showConfirmModal({
         title: "Merge Pull Request",
@@ -208,17 +209,16 @@
         const res = await fetch("/hub/merge", {
           method: "POST",
           headers: getHubHeaders(),
-    });
-    const data = await res.json();
+        });
+        const data = await res.json();
 
-    if (!res.ok) throw new Error(data.detail || "Failed to merge PR");
+        if (!res.ok) throw new Error(data.detail || "Failed to merge PR");
 
-    showToast(data.message, "success", 8000);
+        showToast(data.message, "success", 8000);
 
-    // Optional: Encourage user to terminate the session after successful merge
-    setTimeout(() => {
-      showToast("Merge complete. You can now safely Finish the session.", "info", 5000);
-    }, 2000);
+        setTimeout(() => {
+          showToast("Merge complete. You can now safely Finish the session.", "info", 5000);
+        }, 2000);
 
     } catch (err) {
         showToast(err.message, "error", 15000);
@@ -226,6 +226,7 @@
         setButtonLoading(btn, false, "Merge");
     }
   }
+
   async function handleFinishClick() {
     const confirmed = await showConfirmModal({
       title: "End Editing Session",
@@ -374,8 +375,8 @@
       #hub-toolbar-root {
         position: fixed;
         top: 8px;
-        left: 50%;                     /* Move to horizontal center */
-        transform: translateX(-50%);   /* Shift back by half its width to perfectly center it */
+        left: 50%;
+        transform: translateX(-50%);
         z-index: 99999;
         display: flex;
         align-items: center;

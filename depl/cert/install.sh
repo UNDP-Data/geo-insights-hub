@@ -93,33 +93,31 @@ if [[ "${LE_ENV}" == "prod" ]]; then
 fi
 # --- PRODCERT REUSE LOGIC END ---
 
-echo "==> [cert] Applying Certificate '${CERT_NAME}' in namespace '${CERT_NAMESPACE}'..."
-envsubst < "${SCRIPT_DIR}/cluster-wide-cert.yaml" | kubectl apply -f -
-
-# Smart output depending on what path we took
+# --- CONDITIONAL CERTIFICATE APPLICATION ---
 if [[ "${USED_LOCAL_PROD_CERT}" == "true" ]]; then
-  echo "==> [cert] Verifying cert-manager instantly adopts the local certificates..."
+  echo "==> [cert] Skipping live certificate request; using local prodcert files."
 else
+  echo "==> [cert] Applying Certificate '${CERT_NAME}' in namespace '${CERT_NAMESPACE}'..."
+  envsubst < "${SCRIPT_DIR}/cluster-wide-cert.yaml" | kubectl apply -f -
+
   echo "==> [cert] Waiting for certificate '${CERT_NAME}' to be provisioned..."
   echo "         (Since we need new certs, the DNS-01 challenge may take a few minutes.)"
-fi
 
-# 1. Wait for the certificate resource to be registered in the API
-while ! kubectl get certificate "${CERT_NAME}" -n "${CERT_NAMESPACE}" > /dev/null 2>&1; do
-  sleep 2
-done
+  # 1. Wait for the certificate resource to be registered in the API
+  while ! kubectl get certificate "${CERT_NAME}" -n "${CERT_NAMESPACE}" > /dev/null 2>&1; do
+    sleep 2
+  done
 
-# 2. Block until Ready
-if ! kubectl wait --for=condition=Ready "certificate/${CERT_NAME}" -n "${CERT_NAMESPACE}" --timeout=600s; then
-  echo "ERROR: Certificate provisioning timed out after 10 minutes." >&2
-  echo "Run 'kubectl describe challenge -A' to check for DNS-01 errors." >&2
-  exit 1
+  # 2. Block until Ready
+  if ! kubectl wait --for=condition=Ready "certificate/${CERT_NAME}" -n "${CERT_NAMESPACE}" --timeout=600s; then
+    echo "ERROR: Certificate provisioning timed out after 10 minutes." >&2
+    echo "Run 'kubectl describe challenge -A' to check for DNS-01 errors." >&2
+    exit 1
+  fi
 fi
 
 # --- LOCAL FOLDER SYNC LOGIC BEGIN ---
-# In prod mode, we ALWAYS export the final active certificate back to our local folder.
-# This ensures that if Let's Encrypt generated a new one, we back it up immediately.
-if [[ "${LE_ENV}" == "prod" ]]; then
+if [[ "${LE_ENV}" == "prod" ]] && [[ "${USED_LOCAL_PROD_CERT}" == "false" ]]; then
   echo "==> [cert] Syncing active cluster certificates back to ${PRODCERT_DIR}..."
   mkdir -p "${PRODCERT_DIR}"
 
