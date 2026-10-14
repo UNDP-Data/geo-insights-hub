@@ -145,9 +145,22 @@ def apply_marimo_patches():
 
 # --- Execution Entrypoint ---
 
-if __name__ == "__main__":
-    apply_marimo_patches()
+def test_run():
+    print("run")
 
-    # Pass execution directly to Marimo CLI
-    from marimo._cli.cli import main
-    main()
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        command = sys.argv[1]
+        if command == "edit":
+            apply_marimo_patches()
+            # Pass execution directly to Marimo CLI
+            from marimo._cli.cli import main
+            main()
+        elif command == "run":
+            test_run()
+        else:
+            print("Error: accept only run or edit.")
+            sys.exit(1)
+    else:
+        print("Error: accept only run or edit.")
+        sys.exit(1)
