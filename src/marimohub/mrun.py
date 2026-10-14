@@ -4,16 +4,14 @@ import json
 import logging
 import os
 import sys
-import ast
 import subprocess
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-
 from marimohub import mgit
 
-logger = logging.getLogger("insights-hub.marimo-runner")
+logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
@@ -145,53 +143,33 @@ def apply_marimo_patches():
 
 
 
-# --- Execution Entrypoint ---
 
-def install_notebook_deps(notebook_path: str):
-    """Scans notebook for imports using AST and installs missing packages."""
-    if not notebook_path or not os.path.exists(notebook_path):
-        logger.warning(f"Notebook path not found or not provided: {notebook_path}")
+
+def install_notebook_deps(packages: list[str]):
+    """Installs the provided list of packages using uv."""
+    if not packages:
+        logger.info("No external packages to install.")
         return
 
-    logger.info(f"Scanning imports in notebook: {notebook_path}")
-    imports = set()
-    try:
-        with open(notebook_path, "r", encoding="utf-8") as f:
-            tree = ast.parse(f.read(), filename=notebook_path)
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    pkg = alias.name.split(".")[0]
-                    imports.add(pkg)
-            elif isinstance(node, ast.ImportFrom):
-                if node.module:
-                    pkg = node.module.split(".")[0]
-                    imports.add(pkg)
-    except Exception as e:
-        logger.error(f"Failed to parse notebook AST: {e}")
-        return
-
-    # Filter out built-in/standard library modules roughly or let pip handle them
-    stdlib_modules = set(sys.builtin_module_names).union({
-        "os", "sys", "ast", "json", "logging", "asyncio", "subprocess",
-        "math", "datetime", "pathlib", "collections", "itertools", "functools"
-    })
-    
-    packages_to_install = [pkg for pkg in imports if pkg not in stdlib_modules and not pkg.startswith("_")]
-
-    if packages_to_install:
-        logger.info(f"Installing detected packages: {packages_to_install}")
+    logger.info(f"Installing missing packages: {packages}")
+    for pkg_name in packages:
         try:
             subprocess.run(
-                ["uv", "run", "pip", "install"] + packages_to_install,
-                check=True
+                ["uv", "pip", "install", pkg_name],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
             )
+            logger.info(f"Successfully installed package: {pkg_name}")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Error installing packages: {e}")
+            logger.error(f"Failed to install package '{pkg_name}': {e.stderr.strip()}")
+
+# --- Execution Entrypoint ---
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
+        logger.info(f'sys.argv  {sys.argv[1:]}')
         command = sys.argv[1]
         if command == "edit":
             apply_marimo_patches()
@@ -199,7 +177,11 @@ if __name__ == "__main__":
             main()
         elif command == "run":
             notebook_path = sys.argv[2] if len(sys.argv) > 2 else ""
-            install_notebook_deps(notebook_path)
+            missing_pkgs_env = os.environ.get("MISSING_PACKAGES", "").strip()
+            logger.error(f'Attempting to install {missing_pkgs_env}')
+            if missing_pkgs_env:
+                pkg_list = [p.strip() for p in missing_pkgs_env.split(",") if p.strip()]
+                install_notebook_deps(pkg_list)
             from marimo._cli.cli import main
             main()
         else:
