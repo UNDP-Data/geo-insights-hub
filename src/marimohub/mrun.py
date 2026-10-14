@@ -1,9 +1,12 @@
+#!/usr/init/env python3 if needed, but keeping #!/usr/bin/env python3
 #!/usr/bin/env python3
 import asyncio
 import json
 import logging
 import os
 import sys
+import ast
+import subprocess
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -145,19 +148,61 @@ def apply_marimo_patches():
 
 # --- Execution Entrypoint ---
 
-def test_run():
-    print("run")
+def run_notebook(notebook_path: str):
+    """Scans notebook for imports using AST and installs missing packages."""
+    if not notebook_path or not os.path.exists(notebook_path):
+        logger.warning(f"Notebook path not found or not provided: {notebook_path}")
+        return
+
+    logger.info(f"Scanning imports in notebook: {notebook_path}")
+    imports = set()
+    try:
+        with open(notebook_path, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=notebook_path)
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    pkg = alias.name.split(".")[0]
+                    imports.add(pkg)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    pkg = node.module.split(".")[0]
+                    imports.add(pkg)
+    except Exception as e:
+        logger.error(f"Failed to parse notebook AST: {e}")
+        return
+
+    # Filter out built-in/standard library modules roughly or let pip handle them
+    stdlib_modules = set(sys.builtin_module_names).union({
+        "os", "sys", "ast", "json", "logging", "asyncio", "subprocess",
+        "math", "datetime", "pathlib", "collections", "itertools", "functools"
+    })
+    
+    packages_to_install = [pkg for pkg in imports if pkg not in stdlib_modules and not pkg.startswith("_")]
+
+    if packages_to_install:
+        logger.info(f"Installing detected packages: {packages_to_install}")
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install"] + packages_to_install,
+                check=True
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error installing packages: {e}")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         command = sys.argv[1]
         if command == "edit":
             apply_marimo_patches()
-            # Pass execution directly to Marimo CLI
             from marimo._cli.cli import main
             main()
         elif command == "run":
-            test_run()
+            notebook_path = sys.argv[2] if len(sys.argv) > 2 else ""
+            run_notebook(notebook_path)
+            from marimo._cli.cli import main
+            main()
         else:
             print("Error: accept only run or edit.")
             sys.exit(1)
