@@ -185,7 +185,7 @@ def run_notebook(notebook_path: str):
         logger.info(f"Installing detected packages: {packages_to_install}")
         try:
             subprocess.run(
-                [sys.executable, "-m", "pip", "install"] + packages_to_install,
+                ["uv", "run", "pip", "install"] + packages_to_install,
                 check=True
             )
         except subprocess.CalledProcessError as e:
