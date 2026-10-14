@@ -12,7 +12,7 @@ from starlette.routing import Route
 from marimohub import mgit
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+
 
 
 # --- Starlette Endpoint Handlers ---
@@ -168,8 +168,10 @@ def install_notebook_deps(packages: list[str]):
 # --- Execution Entrypoint ---
 
 if __name__ == "__main__":
+    import os
+    name = os.path.basename(os.path.abspath(__file__))
+    logger = logging.getLogger(name)
     if len(sys.argv) > 1:
-        logger.info(f'sys.argv  {sys.argv[1:]}')
         command = sys.argv[1]
         if command == "edit":
             apply_marimo_patches()
@@ -185,8 +187,8 @@ if __name__ == "__main__":
             from marimo._cli.cli import main
             main()
         else:
-            print("Error: accept only run or edit.")
+            logger.info("Error: accept only run or edit.")
             sys.exit(1)
     else:
-        print("Error: accept only run or edit.")
+        logger.info("Error: accept only run or edit.")
         sys.exit(1)
