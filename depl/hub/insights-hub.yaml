@@ -70,3 +70,28 @@ spec:
     backendRefs:
     - name: insights-hub-svc
       port: 80
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hub-secret-reader
+  namespace: hub
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["hub-env"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hub-secret-reader-binding
+  namespace: hub
+subjects:
+  - kind: ServiceAccount
+    name: default # Or your dedicated Hub ServiceAccount name
+    namespace: hub
+roleRef:
+  kind: Role
+  name: hub-secret-reader
+  apiGroup: rbac.authorization.k8s.io

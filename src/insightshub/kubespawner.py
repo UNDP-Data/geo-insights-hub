@@ -7,29 +7,39 @@ import textwrap
 import logging
 import functools
 from insightshub.config import settings
-
-
+from insightshub.auth import User
+from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
+
+
+
 
 def spawn_marimo_session(
     notebook_path: str,
     mode: str = "run",
     namespace: str = "marimo",
-    user_email: str = None,
-    hostname: str = None,
+    user: User = None,
+    parent_url: str = None,
 ):
     repo_url = f"https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}"
+    internal_hub_url = "http://insights-hub-svc.hub.svc.cluster.local"
 
     config.load_incluster_config()
     k8s_client = client.ApiClient()
     batch_v1 = client.BatchV1Api(k8s_client)
     core_v1 = client.CoreV1Api(k8s_client)
     custom_api = client.CustomObjectsApi(k8s_client)
-
+    parent_url_str = str(parent_url)
+    parsed_url = urlparse(parent_url_str)
+    host = parsed_url.netloc
+    if '.' in host:
+        hostname = '.'.join(host.split('.')[-2:])
+    else:
+        hostname = host
     session_id = uuid.uuid4().hex[:8]
     resource_name = f"marimo-{mode}-{session_id}"
     session_hostname = f"{session_id}.{hostname}"
-    sanitized_email = user_email.replace("@", "-").replace(".", "-")
+    sanitized_email = user.email.replace("@", "-").replace(".", "-")
 
     yaml_template = textwrap.dedent(f"""\
     apiVersion: batch/v1
@@ -127,18 +137,35 @@ def spawn_marimo_session(
 
     if mode == "edit":
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [
-            "marimo", "edit", f"/workspace/{notebook_path}",
+            "python3","-m", "marimohub.mrun", "edit", f"/workspace/{notebook_path}",
             "--host", "0.0.0.0", "--port", "8080", "--headless", "--no-token"
         ]
-        if user_email:
-            job_dict["spec"]["template"]["spec"]["containers"][0]["env"] = [
-                {"name": "GIT_AUTHOR_EMAIL", "value": user_email},
-                {"name": "GIT_AUTHOR_NAME", "value": user_email.split("@")[0]}
-            ]
+        # 1. Base session and Git identity variables
+        session_env_vars = [
+            {"name": "SESSION_ID", "value": session_id},
+            {"name": "BRANCH_NAME", "value": session_id},
+            {"name": "BASE_BRANCH", "value": "main"},
+            {"name": "NOTEBOOK_REL_PATH", "value": notebook_path},
+            {"name": "PARENT_HUB_URL", "value": parent_url_str},
+            {"name": "HUB_CALLBACK_URL", "value": f"{internal_hub_url}/api/sessions"},
+            # Standard Git CLI identity
+            {"name": "GIT_AUTHOR_NAME", "value": str(user.name)},
+            {"name": "GIT_AUTHOR_EMAIL", "value": str(user.email)},
+            {"name": "GIT_COMMITTER_NAME", "value": str(user.name)},
+            {"name": "GIT_COMMITTER_EMAIL", "value": str(user.email)},
+            # Clean, quote-stripped GitHub credentials from Pydantic settings
+            {"name": "NB_GITHUB_TOKEN", "value": settings.nb_github_token},
+            {"name": "NB_GITHUB_REPO", "value": settings.nb_github_repo},
+        ]
+
+
+
+        job_dict["spec"]["template"]["spec"]["containers"][0]["env"] = session_env_vars
+
     else:
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [
             "marimo", "run", f"/workspace/{notebook_path}",
-            "--host", "0.0.0.0", "--port", "8080"
+            "--host", "0.0.0.0", "--port", "8080", "--redirect-console-to-browser"
         ]
 
     # Submit Job first to acquire the cluster-generated UID
@@ -215,8 +242,8 @@ def get_pod_status(session_id: str, namespace: str = "marimo") -> str:
 
 
 
-async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "marimo", user_email: str=None,
-                                hostname:str=None):
+async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "marimo", user:User=None,
+                                parent_url:str=None):
 
 
 
@@ -228,6 +255,11 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "
         with ui.row().classes('items-center gap-4 mb-2'):
             spinner = ui.spinner('dots', size='lg', color='primary')
             status_label = ui.label("Provisioning Kubernetes resources...").classes('text-gray-600')
+        with ui.row().classes('w-full justify-end gap-2'):
+            # The direct link button to open the tab:
+            open_link = ui.link('Open Session', '#', new_tab=True).classes(
+                'hidden undp-btn--small primary text-white px-4 py-2 rounded no-underline font-medium'
+            )
 
         close_btn = ui.button('Close', on_click=dialog.close).classes('mt-4 hidden')
 
@@ -241,8 +273,8 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "
             spawn_marimo_session,
             notebook_path=notebook_path,
             mode=mode,
-            user_email=user_email,
-            hostname=hostname
+            user=user,
+            parent_url=parent_url
 
         )
 
@@ -259,12 +291,12 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "
             if status == "Ready":
                 status_label.set_text("Environment ready! Routing traffic...")
                 spinner.classes('hidden')  # Hide spinner
-                ui.icon('check_circle', color='green', size='lg')  # Show success icon
-
                 # Give the Ingress Controller 1.5 seconds to register the new Service IP
                 await asyncio.sleep(1.5)
 
+                #ui.navigate.to(target_url, new_tab=True)
                 ui.navigate.to(target_url)
+                dialog.close()
                 return
 
             elif status == "Error":

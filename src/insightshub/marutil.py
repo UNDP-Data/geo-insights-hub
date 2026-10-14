@@ -1,5 +1,5 @@
 from starlette.types import ASGIApp
-import marimo
+import marimohub
 import ast
 import os
 import importlib.util

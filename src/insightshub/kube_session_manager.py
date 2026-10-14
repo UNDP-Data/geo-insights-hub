@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 
+
 logger = logging.getLogger("marimo-kube-manager")
 
 
@@ -21,9 +22,11 @@ class KubeMarimoSession:
     owner: str  # sanitized email
     status: str  # 'Pending', 'Running', 'Succeeded', 'Failed'
     notebook_path: str
+    session_type: str  # run|edit
     hostname: Optional[str] = None
     created_at: Optional[datetime] = None
     active_pods: int = 0
+
 
     @property
     def is_alive(self) -> bool:
@@ -91,6 +94,7 @@ class KubeMarimoManager:
 
         for job in jobs.items:
             labels = job.metadata.labels or {}
+            session_type = job.metadata.name.split('-')[-2] or 'UNK'
             annotations = job.metadata.annotations or {}
 
             session_id = labels.get("session") or job.metadata.name.replace("marimo-run-", "")
@@ -119,6 +123,7 @@ class KubeMarimoManager:
                 hostname=hostname,
                 created_at=job.metadata.creation_timestamp,
                 active_pods=job.status.active or 0,
+                session_type=session_type
             )
             self._sessions[session_id] = session
 
