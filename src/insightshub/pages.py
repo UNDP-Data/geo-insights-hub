@@ -1,11 +1,8 @@
 """Site pages. Importing this module registers the routes with NiceGUI."""
 
 from fastapi import Request, Response
-from nicegui import ui
 import os
-import git
 from pathlib import Path
-from insightshub.config import settings
 from insightshub.layout import standard_page
 from insightshub import marutil as mu
 from insightshub.kubespawner import handle_session_launch
@@ -28,16 +25,9 @@ os.environ['NOTEBOOKS_DIR'] = str(NOTEBOOKS_DIR)
 async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
     async with (standard_page(title="Apps", request=request, response=response) as user):
-        repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
-        # Identify if user has Edit rights (authenticated users)
+
+        # 1. Identify if user has Edit rights (authenticated users)
         can_edit = user.is_authenticated
-        # Clone the repository
-        if not NOTEBOOKS_DIR.exists():
-            repo = git.Repo.clone_from(repo_url, NOTEBOOKS_DIR)
-        else:
-            repo = git.Repo(NOTEBOOKS_DIR)
-            repo.remotes.origin.pull()
-            repo.remotes.origin.fetch()
 
         # 2. Resolve the directory to scan
         current_dir = (NOTEBOOKS_DIR / subpath).resolve()

@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 2. Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 ENV PYTHONUNBUFFERED=1
+# pixi
+COPY --from=ghcr.io/prefix-dev/pixi:latest /usr/local/bin/pixi /usr/local/bin/pixi
+
 
 WORKDIR /app
 
@@ -25,6 +28,9 @@ COPY src/ ./src/
 
 # 5. Patch Marimo
 RUN python3 /app/src/marimohub/patch.py
+
+# Create a symlink so /workspace appears inside /app in the file browser
+RUN ln -s /workspace /app/workspace
 
 EXPOSE 80
 

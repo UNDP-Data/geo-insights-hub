@@ -3,11 +3,24 @@
   if (window.__HUB_TOOLBAR_INITIALIZED__) return;
   window.__HUB_TOOLBAR_INITIALIZED__ = true;
 
-  // Poll for document body readiness
+  // Poll for document body AND Marimo's core HTML elements
   const initInterval = setInterval(() => {
-    if (document.body) {
+    // Find elements that guarantee Marimo's base HTML has loaded
+    const tokenEl = document.querySelector('marimo-server-token, meta[name="marimo-server-token"]');
+    const rootEl = document.getElementById('root');
+
+    // If either of these exist, the page is ready to be evaluated
+    if (document.body && (tokenEl || rootEl)) {
       clearInterval(initInterval);
-      initHubToolbar();
+
+      // Check if Marimo is specifically in run/read mode
+      const modeEl = document.querySelector('marimo-mode');
+      const isRunMode = modeEl && modeEl.getAttribute('data-mode') === 'read';
+
+      // Only initialize the toolbar if we are NOT in run mode
+      if (!isRunMode) {
+        initHubToolbar();
+      }
     }
   }, 100);
 
@@ -75,14 +88,19 @@
           Commit
         </button>
 
-        <button id="hub-btn-publish" class="hub-btn hub-btn--primary" title="Push branch, create PR, and merge">
+        <button id="hub-btn-publish" class="hub-btn hub-btn--primary" title="Push branch and create PR or update PR">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
           Publish (PR)
         </button>
+        <button id="hub-btn-merge" class="hub-btn hub-btn--success" title="Merge the open PR into main">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+          Merge
+        </button>
+
 
         <button id="hub-btn-finish" class="hub-btn hub-btn--danger" title="Save and terminate notebook container">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
-          Finish
+          Terminate(delete)
         </button>
       </div>
     `;
@@ -90,6 +108,7 @@
     // Attach listeners
     bar.querySelector("#hub-btn-commit").onclick = handleCommitClick;
     bar.querySelector("#hub-btn-publish").onclick = handlePublishClick;
+    bar.querySelector("#hub-btn-merge").onclick = handleMergeClick;
     bar.querySelector("#hub-btn-finish").onclick = handleFinishClick;
 
     return bar;
@@ -139,8 +158,8 @@
   async function handlePublishClick() {
     const confirmed = await showConfirmModal({
       title: "Publish to Repository",
-      message: `This will push branch <strong>${sessionData.branch}</strong>, create a GitHub Pull Request, and auto-merge if there are no conflicts.`,
-      actionText: "Publish & Merge",
+      message: `This will push your current edits and open (or update) a Draft Pull Request on GitHub.`,
+      actionText: "Publish",
       confirmClass: "hub-btn--primary",
     });
 
@@ -159,19 +178,54 @@
 
       if (!res.ok) throw new Error(data.detail || "Failed to publish PR");
 
-      if (data.status === "conflict") {
-        showToast(`PR #${data.pr_number} created with conflicts. Review on GitHub.`, "warning", 8000);
-        window.open(data.pr_url, "_blank");
-      } else {
-        showToast(`PR #${data.pr_number} merged successfully into main!`, "success", 6000);
+      // Handle the new response statuses from your httpx backend
+      if (data.status === "created") {
+        showToast(`Draft PR #${data.pr_number} created!`, "success", 10000);
+
+      } else if (data.status === "updated") {
+        showToast(`Commits appended to existing PR #${data.pr_number}.`, "success", 6000);
       }
     } catch (err) {
-      showToast(err.message, "error");
+      showToast(err.message, "error", 15000);
     } finally {
       setButtonLoading(btn, false, "Publish (PR)");
     }
   }
+  async function handleMergeClick() {
+    const confirmed = await showConfirmModal({
+        title: "Merge Pull Request",
+        message: `This will squash and merge your current branch into <strong>main</strong>. Ensure you have published all recent commits first.`,
+        actionText: "Merge into Main",
+        confirmClass: "hub-btn--success",
+    });
 
+    if (!confirmed) return;
+
+    const btn = document.getElementById("hub-btn-merge");
+    setButtonLoading(btn, true, "Merging...");
+
+    try {
+        const res = await fetch("/hub/merge", {
+          method: "POST",
+          headers: getHubHeaders(),
+    });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.detail || "Failed to merge PR");
+
+    showToast(data.message, "success", 8000);
+
+    // Optional: Encourage user to terminate the session after successful merge
+    setTimeout(() => {
+      showToast("Merge complete. You can now safely Finish the session.", "info", 5000);
+    }, 2000);
+
+    } catch (err) {
+        showToast(err.message, "error", 15000);
+    } finally {
+        setButtonLoading(btn, false, "Merge");
+    }
+  }
   async function handleFinishClick() {
     const confirmed = await showConfirmModal({
       title: "End Editing Session",
@@ -282,7 +336,7 @@
     document.body.appendChild(container);
   }
 
-  function showToast(message, type = "info", duration = 4000) {
+  function showToast(message, type = "info", duration = 15000) {
     const container = document.getElementById("hub-toast-container");
     if (!container) return;
 
@@ -320,7 +374,8 @@
       #hub-toolbar-root {
         position: fixed;
         top: 8px;
-        right: 80px; /* Sits cleanly to the left of Marimo's native utility controls */
+        left: 50%;                     /* Move to horizontal center */
+        transform: translateX(-50%);   /* Shift back by half its width to perfectly center it */
         z-index: 99999;
         display: flex;
         align-items: center;
@@ -408,6 +463,12 @@
         color: #a1a1aa;
       }
       .hub-btn--subtle:hover { color: #f4f4f5; }
+
+      .hub-btn--success {
+        background: #16a34a;
+        color: #ffffff;
+     }
+     .hub-btn--success:hover { background: #15803d; }
 
       /* Modals */
       .hub-modal-overlay {

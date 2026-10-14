@@ -56,12 +56,21 @@ async def handle_publish(request: Request) -> JSONResponse:
 
         title = body.get("title")
         # Offload blocking Git & GitHub API calls to a worker thread
-        result = await asyncio.to_thread(mgit.publish_and_merge, title)
+        result = await asyncio.to_thread(mgit.publish_to_pr, title)
         return JSONResponse(result)
     except Exception as e:
         logger.exception("Publish failed")
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=400)
 
+async def handle_merge(request: Request) -> JSONResponse:
+    """Merges the active branch's Pull Request via GitHub API."""
+    try:
+        # Offload blocking API call to a worker thread
+        result = await asyncio.to_thread(mgit.merge_pr)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception("Merge failed")
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=400)
 
 async def _delayed_kill():
     """Waits briefly for HTTP response to reach the browser before requesting pod teardown."""
@@ -88,6 +97,7 @@ def register_hub_routes(app):
         Route("/hub/session-info", handle_session_info, methods=["GET"]),
         Route("/hub/commit", handle_commit, methods=["POST"]),
         Route("/hub/publish", handle_publish, methods=["POST"]),
+        Route("/hub/merge", handle_merge, methods=["POST"]),
         Route("/hub/kill", handle_kill, methods=["POST"]),
     ]
 
@@ -130,6 +140,7 @@ def apply_marimo_patches():
 
     if not patched:
         logger.warning("Could not find create_starlette_app to patch in standard Marimo modules.")
+
 
 
 # --- Execution Entrypoint ---

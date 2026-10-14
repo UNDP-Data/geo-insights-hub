@@ -165,7 +165,7 @@ def spawn_marimo_session(
     else:
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [
             "marimo", "run", f"/workspace/{notebook_path}",
-            "--host", "0.0.0.0", "--port", "8080"
+            "--host", "0.0.0.0", "--port", "8080", "--redirect-console-to-browser"
         ]
 
     # Submit Job first to acquire the cluster-generated UID

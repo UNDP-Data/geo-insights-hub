@@ -2,6 +2,9 @@ import logging
 import os
 import git
 import httpx
+from git import Repo
+import time
+
 
 logger = logging.getLogger("insights-hub.mgit")
 logging.basicConfig(level=logging.INFO)
@@ -209,3 +212,150 @@ def terminate_session() -> None:
         except Exception as err:
             logger.error(f"Teardown callback failed at {target_url}: {err}")
             raise
+
+
+def get_repo_info():
+    """Extracts owner and repo name from the NB_GITHUB_REPO environment variable."""
+    nb_repo = os.environ.get("NB_GITHUB_REPO")
+
+    if not nb_repo:
+        raise Exception("NB_GITHUB_REPO environment variable is missing.")
+
+    # Clean up the string (e.g., "UNDP-data/geo-careatlas-notebooks.git")
+    nb_repo = nb_repo.strip()
+    if nb_repo.endswith(".git"):
+        nb_repo = nb_repo[:-4]
+
+    parts = nb_repo.split("/")
+    if len(parts) != 2:
+        raise Exception(f"Invalid NB_GITHUB_REPO format. Expected 'owner/repo', got '{nb_repo}'")
+
+    return parts[0], parts[1]
+
+
+def publish_to_pr(title: str = None) -> dict:
+    """Pushes the current branch and opens/updates a PR without merging."""
+    github_token = os.environ.get("NB_GITHUB_TOKEN")
+    if not github_token:
+        raise Exception("NB_GITHUB_TOKEN environment variable is missing.")
+
+    # Extract info cleanly from your environment variable
+    repo_owner, repo_name = get_repo_info()
+
+    repo = Repo("/workspace")
+    current_branch = repo.active_branch.name
+
+    # 1. Branch Safety: Never push directly to main
+    if current_branch == "main":
+        current_branch = f"update-{int(time.time())}"
+        repo.git.checkout('-b', current_branch)
+
+    # 2. Authenticate and Push to remote origin
+    origin = repo.remote(name='origin')
+    push_url = f"https://oauth2:{github_token}@github.com/{repo_owner}/{repo_name}.git"
+    origin.set_url(push_url)
+
+    push_info = origin.push(refspec=f'{current_branch}:{current_branch}')
+    if push_info and (push_info[0].flags & push_info[0].ERROR):
+        raise Exception(f"Git Push rejected: {push_info[0].summary}")
+
+    # 3. Interact with GitHub API
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls"
+
+    with httpx.Client() as client:
+        # Check if a PR already exists for this branch
+        res = client.get(
+            api_url,
+            headers=headers,
+            params={"head": f"{repo_owner}:{current_branch}", "state": "open"}
+        )
+        existing_prs = res.json()
+
+        if isinstance(existing_prs, list) and len(existing_prs) > 0:
+            pr = existing_prs[0]
+            return {
+                "status": "updated",
+                "message": "Pushed new commits to the existing PR.",
+                "pr_url": pr["html_url"],
+                "pr_number": pr["number"]
+            }
+
+        # 4. Create a NEW Pull Request
+        pr_data = {
+            "title": title or f"Notebook Updates: {current_branch}",
+            "head": current_branch,
+            "base": "main",
+            "body": "Automated PR generated from Insights Hub. Awaiting review.",
+            "draft": False
+        }
+
+        res = client.post(api_url, headers=headers, json=pr_data)
+
+        if res.status_code != 201:
+            raise Exception(f"GitHub API Error ({res.status_code}): {res.text}")
+
+        new_pr = res.json()
+        return {
+            "status": "created",
+            "message": "Draft PR created successfully! Awaiting review.",
+            "pr_url": new_pr["html_url"],
+            "pr_number": new_pr["number"]
+        }
+
+
+def merge_pr() -> dict:
+    """Finds the open Pull Request for the current branch and merges it."""
+    github_token = os.environ.get("NB_GITHUB_TOKEN")
+    if not github_token:
+        raise Exception("NB_GITHUB_TOKEN environment variable is missing.")
+
+    repo_owner, repo_name = get_repo_info()
+
+    repo = Repo("/workspace")
+    current_branch = repo.active_branch.name
+
+    if current_branch == "main":
+        raise Exception("You are on the main branch. There is no PR to merge.")
+
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls"
+
+    with httpx.Client() as client:
+        # 1. Find the open PR
+        res = client.get(
+            api_url,
+            headers=headers,
+            params={"head": f"{repo_owner}:{current_branch}", "state": "open"}
+        )
+        open_prs = res.json()
+
+        if not open_prs:
+            raise Exception(f"No open Pull Request found for branch '{current_branch}'.")
+
+        pr_number = open_prs[0]["number"]
+
+        # 2. Execute the Merge
+        merge_url = f"{api_url}/{pr_number}/merge"
+        merge_res = client.put(
+            merge_url,
+            headers=headers,
+            json={"merge_method": "squash"}  # Recommended to keep main clean
+        )
+
+        if merge_res.status_code == 200:
+            return {
+                "status": "merged",
+                "message": f"Successfully merged PR #{pr_number} into main!",
+                "pr_number": pr_number
+            }
+        elif merge_res.status_code == 405:
+            raise Exception("PR cannot be merged right now. It may have conflicts or require an approval.")
+        else:
+            raise Exception(f"Merge failed ({merge_res.status_code}): {merge_res.text}")
