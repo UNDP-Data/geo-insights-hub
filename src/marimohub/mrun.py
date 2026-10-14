@@ -1,4 +1,3 @@
-#!/usr/init/env python3 if needed, but keeping #!/usr/bin/env python3
 #!/usr/bin/env python3
 import asyncio
 import json
@@ -148,7 +147,7 @@ def apply_marimo_patches():
 
 # --- Execution Entrypoint ---
 
-def run_notebook(notebook_path: str):
+def install_notebook_deps(notebook_path: str):
     """Scans notebook for imports using AST and installs missing packages."""
     if not notebook_path or not os.path.exists(notebook_path):
         logger.warning(f"Notebook path not found or not provided: {notebook_path}")
@@ -200,7 +199,7 @@ if __name__ == "__main__":
             main()
         elif command == "run":
             notebook_path = sys.argv[2] if len(sys.argv) > 2 else ""
-            run_notebook(notebook_path)
+            install_notebook_deps(notebook_path)
             from marimo._cli.cli import main
             main()
         else:
