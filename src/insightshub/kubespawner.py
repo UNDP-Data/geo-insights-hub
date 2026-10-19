@@ -1,6 +1,6 @@
 import uuid
 import yaml
-from kubernetes import client, config, utils
+from kubernetes import client, config
 import asyncio
 from nicegui import ui
 import textwrap
@@ -9,6 +9,7 @@ import functools
 from pathlib import Path
 from insightshub.config import settings
 from insightshub.auth import User
+from insightshub import pages
 from urllib.parse import urlparse
 import tempfile
 import git
@@ -17,6 +18,21 @@ import importlib
 import sys
 import httpx
 
+def sync_repo():
+    repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
+    if not pages.NOTEBOOKS_DIR.exists():
+        git.Repo.clone_from(repo_url, pages.NOTEBOOKS_DIR)
+    else:
+        repo = git.Repo(pages.NOTEBOOKS_DIR)
+        repo.remotes.origin.pull()
+        repo.remotes.origin.fetch()
+
+
+# def sync_repo_task():
+#     try:
+#         sync_repo()  # Your existing function that pulls Git and builds APP_CACHE
+#     except Exception as e:
+#         logger.error(f"Git sync failed: {e}")
 
 
 
@@ -318,7 +334,7 @@ def spawn_marimo_session(
     final_url = f"https://{session_hostname}"
     logger.info(f"Provisioned resources for {resource_name} at {final_url} (Job UID: {job_uid})")
 
-    return session_id, final_url
+    return session_id, final_url, resource_name
 
 def get_pod_status(session_id: str, namespace: str = "marimo") -> str:
     """Queries K8s for the pod matching the session_id and returns a human-readable status."""
@@ -391,12 +407,9 @@ def detect_missing_deps(source_code: str) -> list[str]:
     return packages_to_install
 
 
-async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "marimo", user:User=None,
-                                parent_url:str=None):
-
-
-
-    # 0. Create a modal dialog that prevents the user from clicking elsewhere
+async def handle_session_launch(notebook_path: str, mode: str, namespace: str = "marimo", user: User = None,
+                                parent_url: str = None):
+    # 0. Create a modal dialog
     with ui.dialog().classes('backdrop-blur-sm').props('persistent') as dialog, ui.card().classes(
             'w-full max-w-md p-6'):
         ui.label(f"Preparing {mode.capitalize()} Session").classes('text-xl font-bold mb-6 text-gray-800')
@@ -404,32 +417,27 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "
         with ui.row().classes('items-center gap-4 mb-2'):
             spinner = ui.spinner('dots', size='lg', color='primary')
             status_label = ui.label("Provisioning Kubernetes resources...").classes('text-gray-600')
+
         with ui.row().classes('w-full justify-end gap-2'):
-            # The direct link button to open the tab:
-            open_link = ui.link('Open Session', '#', new_tab=True).classes(
+            open_link = ui.link('Open Session manually', '#', new_tab=True).classes(
                 'hidden undp-btn--small primary text-white px-4 py-2 rounded no-underline font-medium'
             )
-
-        close_btn = ui.button('Close', on_click=dialog.close).classes('mt-4 hidden')
+            close_btn = ui.button('Close', on_click=dialog.close).classes('mt-4 hidden')
 
     dialog.open()
     loop = asyncio.get_event_loop()
 
     try:
-        # 1. missing packages
         source_code = await fetch_notebook_source_via_git(notebook_path)
         missing_packages = detect_missing_deps(source_code)
         verified_packages = []
         if missing_packages:
             status_label.set_text(f'{notebook_path} needs {len(missing_packages)} additional packages...')
-            logger.info(f'{notebook_path} needs {len(missing_packages)} additional packages...')
             await asyncio.sleep(1)
             verified_packages = await resolve_dependencies_interactively(missing_packages, status_label)
-            status_label.set_text(f'{verified_packages} have been verified on pypi...')
-            logger.info(f'{verified_packages} have been verified on pypi...')
+            status_label.set_text(f'{len(verified_packages)} packages verified on pypi...')
             await asyncio.sleep(1)
-        # 2. Spawn the K8s resources
-        # Bind the keyword arguments safely using partial
+
         spawn_task = functools.partial(
             spawn_marimo_session,
             notebook_path=notebook_path,
@@ -437,68 +445,230 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace:str = "
             user=user,
             parent_url=parent_url,
             missing_packages=verified_packages
-
         )
 
-        session_id, target_url = await loop.run_in_executor(None, spawn_task)
+        # 1. Unpack all three variables
+        session_id, target_url, resource_name = await loop.run_in_executor(None, spawn_task)
 
-        # 3. Smart Polling Loop (Timeout after 60 seconds)
-        max_retries = 60
-        for _ in range(max_retries):
-            await asyncio.sleep(1)  # Yield control back to the UI to keep the spinner animating
+        # 2. Build the INTERNAL K8s Service URL (Service routes port 80 -> pod 8080)
+        internal_url = f"http://{resource_name}.{namespace}.svc.cluster.local:80"
 
-            # Ask K8s what the pod is doing
-            status = await loop.run_in_executor(None, get_pod_status, session_id, namespace)
+        max_retries = 90  # 90 seconds total timeout
+        pod_is_ready = False
 
-            if status == "Ready":
-                status_label.set_text("Environment ready! Verifying network route...")
+        # 3. Clean Polling Loop
+        async with httpx.AsyncClient(verify=False) as client:
+            for _ in range(max_retries):
+                await asyncio.sleep(1.0)
 
-                route_ready = False
-                # Disable SSL verification in case your local Kind cluster uses self-signed certs
-                async with httpx.AsyncClient(verify=False) as client:
-                    # Poll the URL for up to 20 seconds
-                    for _ in range(20):
-                        try:
-                            # Attempt to hit the Marimo server
-                            response = await client.get(target_url, timeout=2.0)
-                            if response.status_code == 200:
-                                route_ready = True
-                                break
-                        except httpx.RequestError:
-                            # The Ingress/Gateway is still wiring up, ignore the connection error
-                            pass
+                # Phase A: Check K8s Pod Status
+                if not pod_is_ready:
+                    status = await loop.run_in_executor(None, get_pod_status, session_id, namespace)
 
-                        await asyncio.sleep(1.0)
+                    if status == "Ready":
+                        pod_is_ready = True
+                        status_label.set_text("Environment ready! Waiting for server to boot...")
+                    elif status == "Error":
+                        status_label.set_text("Container failed to start.")
+                        status_label.classes('text-red-500 font-bold')
+                        spinner.classes('hidden')
+                        close_btn.classes(remove='hidden')
+                        return
+                    else:
+                        status_label.set_text(status)
 
-                spinner.classes('hidden')
+                # Phase B: Poll the INTERNAL URL
+                if pod_is_ready:
+                    try:
+                        # 1-second timeout so it doesn't freeze the loop
+                        response = await client.get(internal_url, timeout=1.0)
 
-                if route_ready:
-                    status_label.set_text("Routing established! Opening session...")
-                    await asyncio.sleep(0.5)  # Brief pause so the user sees the success message
-                    ui.navigate.to(target_url)
-                    dialog.close()
-                return
+                        # Once Marimo binds the port, it will answer the ping
+                        if response.status_code in (200, 302, 401, 403):
+                            status_label.set_text("Server online! Opening session...")
+                            spinner.classes('hidden')
+                            await asyncio.sleep(0.5)
 
-            elif status == "Error":
-                status_label.set_text("Container failed to start.")
-                status_label.classes('text-red-500 font-bold')
-                spinner.classes('hidden')
-                close_btn.classes(remove='hidden')  # Allow user to close dialog
-                return
+                            # Navigate the user to the PUBLIC URL
+                            ui.navigate.to(target_url)
+                            dialog.close()
+                            return
+                        else:
+                            status_label.set_text(f"Server booting (HTTP {response.status_code})...")
 
-            else:
-                # Update the UI with the current K8s phase (e.g., "Allocating node...")
-                status_label.set_text(status)
+                    except httpx.RequestError:
+                        # Connection refused (Marimo process hasn't bound to port 8080 yet)
+                        # We just pass and let it try again on the next second!
+                        pass
 
-        # 4. Handle Timeout
-        status_label.set_text("Timed out waiting for environment.")
-        status_label.classes('text-red-500 font-bold')
+        # 4. Handle Timeout (If Pod never becomes "Ready" OR server never boots in 90 seconds)
         spinner.classes('hidden')
+        status_label.set_text("Timed out waiting for the server to answer.")
+        status_label.classes('text-red-500 font-bold text-sm')
+
         close_btn.classes(remove='hidden')
+        open_link.props(f'href="{target_url}"')
+        open_link.classes(remove='hidden')
 
     except Exception as e:
-        # Catch unexpected K8s API errors (e.g., RBAC issues, syntax errors)
+        logger.error(f"Launch Error: {e}")
         status_label.set_text(f"API Error: {str(e)}")
         status_label.classes('text-red-500 font-bold text-xs')
         spinner.classes('hidden')
         close_btn.classes(remove='hidden')
+
+
+
+async def new_notebok(notebook_path: str, user: User, parent_url: str):
+    repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
+
+    # Standard boilerplate for a blank Marimo notebook
+    blank_content = textwrap.dedent('''\
+        import marimo
+
+        __generated_with = "0.9.0"
+        app = marimo.App(width="medium")
+
+        @app.cell
+        def _():
+            import marimo as mo
+            return (mo,)
+
+        @app.cell
+        def _(mo):
+            mo.md("# 🚀 New Notebook\\nStart building your insights here.")
+            return
+
+        if __name__ == "__main__":
+            app.run()
+    ''')
+
+    loop = asyncio.get_event_loop()
+
+    def _push_to_git():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Sparse clone to keep it incredibly fast
+            repo = git.Repo.clone_from(repo_url, tmpdir, branch="main", depth=1)
+
+            # Configure author
+            repo.config_writer().set_value("user", "name", str(user.name)).release()
+            repo.config_writer().set_value("user", "email", str(user.email)).release()
+
+            # 2. Write the boilerplate to the target path
+            target_file = Path(tmpdir) / notebook_path
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            target_file.write_text(blank_content, encoding="utf-8")
+
+            # 3. Commit and push
+            repo.index.add([notebook_path])
+            repo.index.commit(f"Initialize empty notebook: {notebook_path} by {user.name}")
+            push_info = repo.remote(name='origin').push()
+            if push_info and (push_info[0].flags & push_info[0].ERROR):
+                raise Exception(f"Git Push rejected: {push_info[0].summary}")
+
+                # --- NEW: Immediately sync the server's local directory! ---
+            try:
+                sync_repo()
+            except Exception as e:
+                logger.error(f"Failed to run local sync after create: {e}")
+
+
+    # Execute the file creation in a background thread to prevent UI freezing
+    await loop.run_in_executor(None, _push_to_git)
+
+
+
+async def open_create_notebook_dialog(current_subpath: str, user: User, parent_url: str):
+    """Opens a dialog to create a blank, named marimo notebook."""
+
+    with ui.dialog().classes('backdrop-blur-sm') as dialog, ui.card().classes('w-full max-w-md p-6'):
+        ui.label("New Notebook").classes('text-xl font-bold mb-4 text-gray-800')
+
+        name_input = ui.input(
+            label="Notebook Name",
+            placeholder="e.g., q3_analysis"
+        ).classes('w-full mb-6').props('autofocus')
+
+        with ui.row().classes('w-full justify-end gap-2'):
+            ui.button("Cancel", on_click=dialog.close).props('flat color=grey')
+
+            async def handle_create():
+                raw_name = name_input.value.strip()
+                if not raw_name:
+                    ui.notify("Please enter a notebook name", type='negative')
+                    return
+
+                # Format to a safe python filename
+                filename = f"{raw_name.lower().replace(' ', '_')}.py"
+                rel_path = str(Path(current_subpath) / filename) if current_subpath else filename
+
+                dialog.close()
+                ui.notify(f"Initializing {filename}...", type='info')
+
+                await new_notebok(rel_path, user, parent_url)
+                ui.navigate.reload()
+            ui.button("Create & Edit", on_click=handle_create).classes('undp-btn--small primary text-white')
+
+    dialog.open()
+
+
+async def delete_notebook_git(notebook_path: str, user: User):
+    """Uses Git to remove a notebook from the repository and push the deletion."""
+    repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
+    loop = asyncio.get_event_loop()
+
+    def _push_deletion():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Sparse clone
+            repo = git.Repo.clone_from(repo_url, tmpdir, branch="main", depth=1)
+
+            # Configure author
+            repo.config_writer().set_value("user", "name", str(user.name)).release()
+            repo.config_writer().set_value("user", "email", str(user.email)).release()
+
+            target_file = Path(tmpdir) / notebook_path
+
+            # 2. Only delete if it exists
+            if target_file.exists():
+                repo.git.rm(notebook_path)
+                repo.index.commit(f"Delete notebook: {notebook_path} by {user.name}")
+
+                # 3. Push back to GitHub
+                push_info = repo.remote(name='origin').push()
+                if push_info and (push_info[0].flags & push_info[0].ERROR):
+                    raise Exception(f"Git Push rejected: {push_info[0].summary}")
+                try:
+                    sync_repo()
+                    ui.navigate.reload()
+                except Exception as e:
+                    logger.error(f"Failed to run local sync after delete: {e}")
+            else:
+                raise FileNotFoundError("Notebook not found in repository.")
+
+    # Execute in background thread
+    await loop.run_in_executor(None, _push_deletion)
+
+def confirm_delete_notebook(notebook_path: str, notebook_name: str, user: User):
+    """Shows a confirmation dialog before deleting a notebook."""
+    with ui.dialog().classes('backdrop-blur-sm') as dialog, ui.card().classes('p-6 max-w-sm'):
+        ui.label("Delete Notebook?").classes('text-xl font-bold text-red-600 mb-2')
+        ui.label(
+            f"Are you sure you want to permanently delete '{notebook_name}'? This will remove it from the repository for everyone.").classes(
+            'text-sm text-gray-700 mb-6')
+
+        with ui.row().classes('w-full justify-end gap-2'):
+            ui.button('Cancel', on_click=dialog.close).props('flat color=grey')
+
+            async def perform_delete():
+                dialog.close()
+                ui.notify(f"Deleting {notebook_name}...", type='warning')
+                try:
+                    await delete_notebook_git(notebook_path, user)
+                    ui.notify(f"Successfully deleted {notebook_name}", type='positive')
+                    ui.navigate.reload()
+                except Exception as e:
+                    ui.notify(f"Error deleting: {str(e)}", type='negative')
+
+            ui.button('Delete', color='negative', on_click=perform_delete).classes('text-white')
+
+    dialog.open()

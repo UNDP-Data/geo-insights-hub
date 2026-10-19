@@ -22,7 +22,7 @@ raw_repo = os.environ.get("NB_GITHUB_REPO", "")
 REPO_FULL_NAME = raw_repo.removesuffix(".git")
 
 # Authentication Token
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("NB_GITHUB_TOKEN", "")
+GITHUB_TOKEN = os.environ.get("NB_GITHUB_TOKEN", "")
 
 # Identity
 GIT_USER_NAME = (
@@ -359,3 +359,4 @@ def merge_pr() -> dict:
             raise Exception("PR cannot be merged right now. It may have conflicts or require an approval.")
         else:
             raise Exception(f"Merge failed ({merge_res.status_code}): {merge_res.text}")
+

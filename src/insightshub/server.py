@@ -7,9 +7,9 @@ from fastapi import FastAPI, Request, BackgroundTasks
 from nicegui import app as nicegui_app
 from nicegui import ui
 from insightshub.config import settings
+import git
 from insightshub import pages
 from kubernetes import client
-import git
 import asyncio
 
 logging.basicConfig(level=logging.INFO)
@@ -21,6 +21,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 from insightshub.kube_session_manager import manager
+
 def sync_repo():
     repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
     if not pages.NOTEBOOKS_DIR.exists():
@@ -36,7 +37,6 @@ def sync_repo_task():
         sync_repo()  # Your existing function that pulls Git and builds APP_CACHE
     except Exception as e:
         logger.error(f"Git sync failed: {e}")
-
 
 # 1. Create a native async background loop
 async def periodic_sync():
