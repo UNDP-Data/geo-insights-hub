@@ -7,12 +7,13 @@ config:
     email_domains = [ "*" ]
     github_org = "${OAUTH_ORG_NAME}"
     github_team = "${OAUTH_TEAM_NAME}"
-    scope = "user:email,read:org"
+    scope = "user:email,read:org,repo"
     redirect_url = "https://${AUTH_SUBDOMAIN}.${BASE_DOMAIN}/oauth2/callback"
     cookie_secure = false
     reverse_proxy = true
     set_xauthrequest = true
     pass_user_headers = true
+    pass_access_token = true
     cookie_domains = ["${OAUTH2_PROXY_COOKIE_DOMAINS}"]
     whitelist_domains = ["${OAUTH2_PROXY_WHITELIST_DOMAINS}"]
     upstreams = [ "static://200" ]

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from insightshub.layout import standard_page
 from insightshub import marutil as mu
-from insightshub.kubespawner import handle_session_launch
+from insightshub.kubespawner import handle_session_launch, open_create_notebook_dialog, confirm_delete_notebook
 from insightshub.kube_session_manager import manager
 import asyncio
 from fastapi.responses import RedirectResponse
@@ -24,7 +24,7 @@ os.environ['NOTEBOOKS_DIR'] = str(NOTEBOOKS_DIR)
 @ui.page('/apps/{subpath:path}')
 async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
-    async with (standard_page(title="Apps", request=request, response=response) as user):
+    async with standard_page(title="Apps", request=request, response=response) as user:
 
         # 1. Identify if user has Edit rights (authenticated users)
         can_edit = user.is_authenticated
@@ -50,6 +50,20 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                     ui.icon('arrow_back', color='[#006db0]').classes('group-hover:-translate-x-1 transition-transform')
                     ui.label(f"Back to {parent_path if str(parent_path) != '.' else 'Apps'}").classes(
                         'text-[#006db0] font-bold text-xs tracking-widest uppercase')
+            if can_edit:
+                ui.button(
+                    'New',
+                    icon='add',
+                    # Pass subpath so it knows WHICH folder to create it in!
+                    on_click=lambda e: open_create_notebook_dialog(
+                        current_subpath=subpath,
+                        user=user,
+                        parent_url=str(request.url)
+                    )
+                ).classes(
+                    'text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
+
+
             # 4. The Grid
             with ui.grid(columns='1fr 1fr 1fr').classes('w-full gap-10 items-stretch'):
                 items = [
@@ -123,26 +137,42 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                     # 2 buttons, equal widths
                                     ui.button(
                                         text='Launch',
+                                        icon="launch",
                                         on_click=lambda e, p=str(rel_path): handle_session_launch(
                                             notebook_path=p,
                                             mode="run",
                                             user=user,
                                             parent_url=request.url
                                         )
-                                    ).classes('undp-btn--small primary text-white flex-1 w-1/2 capitalize') \
+                                    #).classes('undp-btn--small primary text-white flex-1 w-1/2 capitalize') \
+                                    ).classes('text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider') \
                                         .tooltip(f'View as interactive app')
                                         #.tooltip(f'View as interactive app at {next_uri}')
 
                                     ui.button(
                                         'Edit',
-                                        color="secondary",
+                                        icon="edit",
+                                        color="blue-grey",
                                         on_click=lambda e, p=str(rel_path): handle_session_launch(
                                             notebook_path=p,
                                             mode="edit",
                                             user=user,
                                             parent_url=request.url
                                         )
-                                    ).classes('undp-btn--small secondary text-white flex-1 w-1/2 capitalize') \
+                                    #).classes('undp-btn--small secondary text-white flex-1 w-1/2 capitalize') \
+                                    ).classes('text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider') \
+                                        .tooltip(
+                                        f'Edit notebook...')
+                                    ui.button(
+                                        'Delete',
+                                        icon="delete",
+                                        color="negative",
+                                        on_click=lambda e, p=str(rel_path), n=item_label: confirm_delete_notebook(
+                                            notebook_path=p, notebook_name=n, user=user
+                                        )
+                                        # ).classes('undp-btn--small secondary text-white flex-1 w-1/2 capitalize') \
+                                    ).classes(
+                                        'text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider') \
                                         .tooltip(
                                         f'Edit notebook...')
 

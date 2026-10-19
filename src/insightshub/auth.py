@@ -14,7 +14,9 @@ class User:
     """Represents an application user."""
     name: str = 'Guest'
     email: str = ''
+    token:str = ''
     groups: tuple[str, ...] = ()
+
 
     def __post_init__(self):
         if not self.email:
@@ -90,68 +92,16 @@ def user_from_headers(request: Request) -> User:
         User: An instance of the User object or Guest user if headers are missing.
     """
     h = request.headers
+    token = h.get("x-auth-request-access-token", "")
     email = h.get("x-auth-request-email") or h.get("x-forwarded-email") or User.email
     user = h.get("x-auth-request-user") or h.get("x-forwarded-user") or User.name
     groups_raw = h.get("x-auth-request-groups") or h.get("x-forwarded-groups") or ""
     groups = tuple([g.strip() for g in groups_raw.split(",") if g.strip()])
 
-    return User(name=user, email=email, groups=groups)
+    return User(name=user, email=email, groups=groups, token=token)
 
 
 
-def check_auth(url: str, request: Request, forward_headers: bool = False) -> User:
-    """
-    Synchronously verifies authentication by validating cookies against an auth service.
-
-    Args:
-        url (str): The URL of the authentication validation service.
-        request (Request): The incoming FastAPI request.
-        forward_headers (bool, optional): If True, injects auth headers back into
-                                          the request scope. Defaults to False.
-
-    Returns:
-        User: An authenticated User instance if successful, otherwise a default Guest user.
-    """
-    with httpx.Client(timeout=3.0) as client:
-        try:
-            headers = {
-                "X-Forwarded-Proto": request.headers.get("x-forwarded-proto", request.url.scheme),
-                "X-Forwarded-Host": request.headers.get("x-forwarded-host", request.headers.get("host", "")),
-                "X-Forwarded-Uri": request.url.path + (("?" + request.url.query) if request.url.query else ""),
-            }
-            ua = request.headers.get("user-agent")
-            if ua:
-                headers["User-Agent"] = ua
-
-            response = client.get(url, cookies=request.cookies, headers=headers)
-
-            if response.status_code in (200, 202):
-                email = response.headers.get("x-auth-request-email", "")
-                groups_raw = response.headers.get("x-auth-request-groups", "")
-                groups = tuple([g.strip() for g in groups_raw.split(",")])
-                username = response.headers.get("x-auth-request-user", "Guest")
-
-                if forward_headers:
-                    auth_headers = {
-                        "x-auth-request-email": response.headers.get("x-auth-request-email", "Guest"),
-                        "x-auth-request-user": response.headers.get("x-auth-request-user", ""),
-                        "x-auth-request-groups": response.headers.get("x-auth-request-groups", ""),
-                    }
-                    current_headers = dict(request.headers)
-                    current_headers.update(auth_headers)
-                    request.scope["headers"] = [
-                        (k.lower().encode("latin-1"), v.encode("latin-1"))
-                        for k, v in current_headers.items()
-                    ]
-                    if hasattr(request, "_headers"):
-                        delattr(request, "_headers")
-
-                return User(name=username, email=email, groups=groups)
-
-        except Exception as e:
-            logger.error(f"Auth Service unreachable: {e}")
-
-    return User()
 
 
 async def authenticate(url: str, request: Request, forward_headers: bool = False) -> User:
@@ -186,6 +136,7 @@ async def authenticate(url: str, request: Request, forward_headers: bool = False
             response = await client.get(url, cookies=request.cookies, headers=headers)
 
             if response.status_code in (200, 202):
+                token = response.headers.get("x-auth-request-access-token", "")
                 email = response.headers.get("x-auth-request-email", "")
                 groups_raw = response.headers.get("x-auth-request-groups", "")
                 groups = [g.strip() for g in groups_raw.split(",")] if groups_raw else []
@@ -196,6 +147,7 @@ async def authenticate(url: str, request: Request, forward_headers: bool = False
                         "x-auth-request-email": response.headers.get("x-auth-request-email", "Guest"),
                         "x-auth-request-user": response.headers.get("x-auth-request-user", ""),
                         "x-auth-request-groups": response.headers.get("x-auth-request-groups", ""),
+                        "x-auth-request-access-token": token
                     }
                     current_headers = dict(request.headers)
                     current_headers.update(auth_headers)
@@ -206,7 +158,7 @@ async def authenticate(url: str, request: Request, forward_headers: bool = False
                     if hasattr(request, "_headers"):
                         delattr(request, "_headers")
 
-                return User(name=username, email=email, groups=groups)
+                return User(name=username, email=email, groups=groups, token=token)
 
         except Exception as e:
             logger.error(f"Auth Service unreachable: {e}")
