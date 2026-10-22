@@ -1,11 +1,14 @@
+
 """Site pages. Importing this module registers the routes with NiceGUI."""
 
 from fastapi import Request, Response
 import os
 from pathlib import Path
 from insightshub.layout import standard_page
+from insightshub.auth import sign_in_url, page_url
 from insightshub import marutil as mu
-from insightshub.kubespawner import handle_session_launch, open_create_notebook_dialog, confirm_delete_notebook
+from insightshub.kubespawner import handle_session_launch
+from insightshub.gitui import open_create_notebook_dialog, confirm_delete_notebook, confirm_delete_folder
 from insightshub.kube_session_manager import manager
 import asyncio
 from fastapi.responses import RedirectResponse
@@ -13,7 +16,9 @@ from urllib.parse import quote
 from nicegui import app, ui
 from insightshub.config import settings
 import json
-from insightshub import utils
+from insightshub import gitui
+import logging
+logger = logging.getLogger(__name__)
 
 
 
@@ -24,25 +29,64 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
     async with standard_page(title="Apps", request=request, response=response) as user:
 
+        logger.debug(f'User {user}')
 
+        # 1. Traversal protection
+        try:
+            current_dir = (gitui.NOTEBOOKS_DIR / subpath).resolve()
+            current_dir.relative_to(gitui.NOTEBOOKS_DIR.resolve())
+        except (ValueError, RuntimeError):
+            ui.notify("Invalid path trajectory.", type='negative')
+            ui.navigate.to('/')
+            return
 
-        # 1. Identify if user has Edit rights (authenticated users)
-        can_edit = user.is_authenticated
+        # 2. Permission flags
+        # Authenticated users have editing rights; guests have read-only rights
+        can_edit = bool(user and user.is_authenticated)
 
-        # 2. Resolve the directory to scan
-        current_dir = (utils.NOTEBOOKS_DIR / subpath).resolve()
-        # Security: Prevent escaping the root directory
-        if  not can_edit or not str(current_dir).startswith(str(utils.NOTEBOOKS_DIR)):
-            with ui.column().classes('w-full max-w-xl mx-auto my-16 p-8 bg-gray-50 border-t-2 border-black shadow-sm gap-4 items-center text-center'):
-                ui.icon('person_off', color='negative').classes('text-4xl')
-                #ui.label('Configuration or Directory Not Found').classes('text-xl font-bold text-black')
-                ui.label('Private repositories can not be accessed without authentication and unfortunately \
-                 no public repositories are currently configured. '
-                         ).classes('text-lg text-gray-600 leading-relaxed')
-                return
+        # 3. Synchronize / Checkout if directory is not on disk yet
         if not current_dir.exists():
-            await asyncio.to_thread(utils.sync_repo, user)
-            ui.navigate.reload()
+            logger.info(f"Directory missing on disk. Attempting sync (can_edit={can_edit})...")
+
+            # Attempts public clone if guest, or authenticated clone if logged in
+            sync_success = await asyncio.to_thread(gitui.sync_repo_task, user=user)
+
+            if sync_success and current_dir.exists():
+                ui.navigate.reload()
+                return
+
+            # If sync failed: this only happens if the repo is private or network dropped
+            with ui.column().classes(
+                    'w-full max-w-xl mx-auto my-24 p-10 bg-white border-t-2 border-black shadow-sm gap-6 items-center text-center'
+            ):
+                ui.icon('lock_outline', color='negative').classes('text-5xl')
+                with ui.column().classes('gap-1 items-center'):
+                    ui.label('ACCESS RESTRICTED').classes('text-xs font-bold tracking-widest text-red-600 uppercase')
+                    ui.label('Authentication Required').classes('text-2xl font-bold text-black')
+                ui.html(
+                    f'The repository <span class="text-red-600 font-bold">{settings.nb_github_repo}</span> cannot be accessed without authorization. '
+                    'Please sign in with GitHub to view and sync workspaces.'
+                ).classes('text-sm text-gray-600 leading-relaxed')
+
+                if not can_edit:
+
+                    sign_in_button = ui.button('Sign In', icon='login') \
+                        .props('color="negative" unelevated') \
+                        .classes('font-bold uppercase tracking-wide hover:scale-105 transition-transform px-6 py-2')
+
+                    async def go_auth():
+                        # Add the native Quasar loading state (shows a spinner automatically)
+                        sign_in_button.props(add='loading')
+
+                        await asyncio.sleep(0.1)
+                        safe_rd = quote(page_url(request), safe='')
+                        ui.navigate.to(f"/_auth/bounce?action=start&rd={safe_rd}")
+
+                    sign_in_button.on('click', go_auth)
+
+                else:
+                    ui.button('Retry Sync', icon='refresh', on_click=lambda: ui.navigate.reload())
+            return
 
         with ui.column().classes('w-full max-w-7xl mx-auto px-6 lg:px-8'):
 
@@ -80,15 +124,32 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
                         # 2. New Button (Far Right Edge)
                         if can_edit:
-                            ui.button(
-                                'New',
-                                icon='add',
-                                on_click=lambda e: open_create_notebook_dialog(
-                                    current_subpath=subpath,
-                                    user=user,
-                                )
-                            ).classes(
-                                'bg-[#006db0] hover:bg-[#005a94] text-white font-bold py-2 px-5 rounded shadow-sm text-sm uppercase tracking-wider')
+                            with ui.row():
+                                ui.button(
+                                    'New',
+                                    icon='add',
+                                    color='negative',
+                                    on_click=lambda e: open_create_notebook_dialog(
+                                        current_subpath=subpath,
+                                        user=user,
+                                    )
+                                ).classes(
+                                    'undp-button text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
+
+                                async def handle_manual_sync():
+                                    ui.notify("Pulling latest changes from GitHub...", type="info")
+                                    # Run the blocking git pull in a background thread
+                                    await asyncio.to_thread(gitui.sync_repo_task, user)
+                                    ui.notify("Sync complete!", type="positive")
+                                    ui.navigate.reload()
+
+                                ui.button(
+                                    'Sync',
+                                    icon='sync',
+                                    color='blue-grey',
+                                    on_click=handle_manual_sync
+                                ).classes(
+                                    'undp-button text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
 
             # 4. The Grid
             with ui.grid(columns='1fr 1fr 1fr').classes('w-full gap-10 items-stretch'):
@@ -99,7 +160,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                 items.sort(key=lambda x: (not x.is_dir(), x.name))
 
                 for item in items:
-                    rel_path = item.relative_to(utils.NOTEBOOKS_DIR)
+                    rel_path = item.relative_to(gitui.NOTEBOOKS_DIR)
                     name, _ = os.path.splitext(item.name)
                     item_label = name.replace('_', ' ')
 
@@ -111,13 +172,30 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                             continue
 
                         with ui.column().classes(
-                                'w-full border-t-2 border-black p-6 flex flex-col justify-between h-full '
+                                'w-full border-t-2 border-black p-3 flex flex-col justify-between h-full '
                                 'bg-white hover:bg-[#006eb5] transition-all duration-200 cursor-pointer group hover:scale-102 transition'
                         ).on('click', lambda p=rel_path: ui.navigate.to(f'/apps/{p}')):
 
                             with ui.column().classes('w-full gap-4'):
-                                # 1. Content Tag
-                                ui.label('APP').classes('text-xs font-bold tracking-wider text-black uppercase ')
+                                with ui.row().classes('w-full items-center justify-between -mt-2'):
+                                    ui.label('APP').classes(
+                                        'text-xs font-bold tracking-wider text-black group-hover:text-white uppercase transition-colors'
+                                    )
+
+                                    # Small close icon button below top border
+                                    if can_edit:
+                                        ui.button(
+                                            icon='close',
+                                            color="negative",
+                                            on_click=lambda e, p=rel_path, n=item.name: confirm_delete_folder(
+                                                folder_path=p, folder_name=n, user=user
+                                            )
+                                        ).props('flat round dense size=sm') \
+                                            .classes(
+                                            '-mr-2 text-neutral-400 hover:text-red-600 group-hover:text-white/80 group-hover:hover:text-white transition-colors') \
+                                            .tooltip(f'Delete folder {item_label}') \
+                                            .on(
+                                            'click.stop')  # Stops click from triggering card navigation to /apps/{p}
 
                                 # 2. Headline
                                 ui.label(item_label).classes(
@@ -132,16 +210,17 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                             with ui.row().classes('items-center gap-1.5 mt-8'):
                                 ui.link('Explore', f'/apps/{rel_path}').classes("undp-cta-link")
 
+
+
                     # ==========================================
                     # NOTEBOOK / ARTICLE CARD
                     # ==========================================
                     elif item.suffix == '.py':
-                        # marimo_slug = str(rel_path).replace('.py', '').replace(os.sep, '/').strip('/')
-                        # next_uri = f'/apps/{marimo_slug}'
+
                         descr = mu.get_global_metadata(str(item.absolute()))
 
                         with ui.column().classes(
-                                'w-full border-t-2 border-black pt-4 pb-6 flex flex-col justify-between h-full bg-transparent group'
+                                'w-full border-t-2 border-black border-b-1 pt-4 pb-6 flex flex-col justify-between h-full bg-transparent group'
                         ):
                             with ui.column().classes('w-full gap-4'):
                                 # 1. Content Tag
@@ -168,12 +247,12 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                             notebook_path=p,
                                             mode="run",
                                             user=user,
-                                            parent_url=request.url
-                                        )
-                                    #).classes('undp-btn--small primary text-white flex-1 w-1/2 capitalize') \
-                                    ).classes('text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider') \
+                                            parent_url=request.url)) \
+                                        .props('unelevated') \
+                                        .style('min-height: 28px; padding: 0 5px !important;') \
+                                        .classes('bg-[#006eb5] text-white font-bold text-xs tracking-wide') \
                                         .tooltip(f'View as interactive app')
-                                        #.tooltip(f'View as interactive app at {next_uri}')
+
 
                                     ui.button(
                                         'Edit',
@@ -183,38 +262,24 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                             notebook_path=p,
                                             mode="edit",
                                             user=user,
-                                            parent_url=request.url
-                                        )
-                                    #).classes('undp-btn--small secondary text-white flex-1 w-1/2 capitalize') \
-                                    ).classes('text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider') \
-                                        .tooltip(
-                                        f'Edit notebook...')
+                                            parent_url=request.url)) \
+                                        .props('unelevated') \
+                                        .style('min-height: 28px; padding: 0 5px !important;') \
+                                        .classes('bg-[#006eb5] text-white font-bold text-xs tracking-wide') \
+                                        .tooltip(f'Edit notebook...')
                                     ui.button(
                                         'Delete',
                                         icon="delete",
                                         color="negative",
                                         on_click=lambda e, p=str(rel_path), n=item_label: confirm_delete_notebook(
                                             notebook_path=p, notebook_name=n, user=user
-                                        )
-                                        # ).classes('undp-btn--small secondary text-white flex-1 w-1/2 capitalize') \
-                                    ).classes(
-                                        'text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider') \
+                                        )) \
+                                        .props('unelevated') \
+                                        .style('min-height: 28px; padding: 0 5px !important;') \
+                                        .classes('bg-[#006eb5] text-white font-bold text-xs tracking-wide') \
                                         .tooltip(
-                                        f'Edit notebook...')
+                                        f'Delete notebook...')
 
-                                    async def handle_manual_sync():
-                                        ui.notify("Pulling latest changes from GitHub...", type="info")
-                                        # Run the blocking git pull in a background thread
-                                        await asyncio.to_thread(utils.sync_repo, user)
-                                        ui.notify("Sync complete!", type="positive")
-                                        ui.navigate.reload()
-
-                                    ui.button(
-                                        'Sync',
-                                        icon='sync',
-                                        on_click=handle_manual_sync
-                                    ).classes(
-                                        'bg-blue-grey text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
 
                                 else:
 

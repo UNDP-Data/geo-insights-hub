@@ -32,7 +32,7 @@ class User:
     @property
     def is_authenticated(self) -> bool:
         """Checks if the user is authenticated (not a default Guest)."""
-        return self.name != 'Guest' and self.email != ''
+        return self.name != 'Guest' and self.email and self.token
 
 
 
