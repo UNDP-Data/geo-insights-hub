@@ -250,6 +250,7 @@ async def standard_page(title: str = None, request: Request = None, response: Re
             app.storage.browser.pop('user', None)
         await asyncio.to_thread(gitui.sync_repo_task, user)
 
+
     load_theme()
     _header(request=request, user=user)
     with ui.column().classes("undp-container undp-main"):
