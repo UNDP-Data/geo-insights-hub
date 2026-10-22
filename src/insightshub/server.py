@@ -23,12 +23,13 @@ logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 logging.getLogger("engineio.server").setLevel(logging.WARNING)
 logging.getLogger("socketio.server").setLevel(logging.WARNING)
 
+from insightshub.kube_session_manager import manager
+
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-from insightshub.kube_session_manager import manager
 
 
 # 1. Create a native async background loop
@@ -49,7 +50,7 @@ async def lifespan(app: FastAPI):
     # Stop the manager polling loop
     await manager.shutdown()
 
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app = FastAPI(title=settings.app_name, lifespan=None)
 
 
 

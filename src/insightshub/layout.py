@@ -1,15 +1,14 @@
 import asyncio
 import dataclasses
-from insightshub import utils
+from insightshub import gitui
 from nicegui import ui, app
 from pathlib import Path
 from fastapi import Request, Response
-from insightshub.auth import User, authenticate, page_url
+from insightshub.auth import User, authenticate, page_url, user_from_headers
 from insightshub.config import settings
 from contextlib import asynccontextmanager
 import logging
 from urllib.parse import quote
-from pydantic import SecretStr
 
 
 logger = logging.getLogger(__name__)
@@ -102,13 +101,12 @@ def _account(request: Request, user: User | None) -> None:
                 .tooltip(f'Connected as {user.email}' if is_authenticated else f'Sign In {user.name} with email: {user.email}')
 
             async def go_auth():
-                logger.info(f'Going to {action} {final_url}')
+                verb = 'sign in' if action == 'start' else 'sign out'
+                logger.info(f'Going to {verb} {final_url}')
                 identity_btn.props('loading icon=sync')
                 identity_btn.classes(add='animate-spin')
                 await asyncio.sleep(.1)
                 safe_rd = quote(rd, safe='')
-
-                asyncio.create_task(asyncio.to_thread(utils.sync_repo_task, user))
                 ui.navigate.to(f"/_auth/bounce?action={action}&rd={safe_rd}")
 
             identity_btn.on('click', go_auth)
@@ -238,7 +236,27 @@ async def standard_page(title: str = None, request: Request = None, response: Re
             if cached_user.is_authenticated:
                 user = cached_user
 
+    # Create a stable identifier that ignores random guest emails
+    current_identity = user.email if user.is_authenticated else 'guest'
+    cached_identity = app.storage.browser.get('sync_identity')
 
+    # Only sync if they actually transitioned between Guest <-> Authenticated User
+    if current_identity != cached_identity:
+        # 1. Update the cache IMMEDIATELY to prevent infinite loops on reload
+        app.storage.browser['sync_identity'] = current_identity
+
+        # If they logged out, ensure the cached user data is wiped
+        if not user.is_authenticated:
+            app.storage.browser.pop('user', None)
+
+        # 2. Define the background task
+        async def run_sync_and_refresh():
+            #ui.notify('Syncing workspace...', type='info', position='top')
+            await asyncio.to_thread(gitui.sync_repo_task, user)
+            ui.navigate.reload()
+
+        # 3. Fire it safely
+        ui.timer(0.1, run_sync_and_refresh, once=True)
     load_theme()
     _header(request=request, user=user)
     with ui.column().classes("undp-container undp-main"):
