@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any,Optional
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     header_label: str
     public_auth_url: str
     private_auth_url: str
-    nb_github_token: str
+    nb_github_token: Optional[SecretStr] = None
     nb_github_repo: str
 
     model_config = SettingsConfigDict(
