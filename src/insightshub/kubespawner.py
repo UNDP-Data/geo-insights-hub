@@ -9,7 +9,7 @@ import functools
 from pathlib import Path
 from insightshub.config import settings
 from insightshub.auth import User
-from insightshub import pages
+from insightshub import utils
 from urllib.parse import urlparse
 import tempfile
 import git
@@ -18,33 +18,16 @@ import importlib
 import sys
 import httpx
 
-def sync_repo():
-    repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
-    if not pages.NOTEBOOKS_DIR.exists():
-        git.Repo.clone_from(repo_url, pages.NOTEBOOKS_DIR)
-    else:
-        repo = git.Repo(pages.NOTEBOOKS_DIR)
-        repo.remotes.origin.pull()
-        repo.remotes.origin.fetch()
-
-
-# def sync_repo_task():
-#     try:
-#         sync_repo()  # Your existing function that pulls Git and builds APP_CACHE
-#     except Exception as e:
-#         logger.error(f"Git sync failed: {e}")
-
-
 
 logger = logging.getLogger(__name__)
 
 
-async def fetch_notebook_source_via_git(notebook_path: str) -> str:
+async def fetch_notebook_source_via_git(notebook_path: str, user:User=None) -> str:
     """
     Uses Git sparse-checkout in an auto-deleting temporary directory
     to pull a specific notebook file and return its source code.
     """
-    repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
+    repo_url = f'https://oauth2:{user.token}@github.com/{settings.nb_github_repo}'
 
     # Create an auto-deleting temporary directory
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -137,7 +120,7 @@ def spawn_marimo_session(
     parent_url: str = None,
     missing_packages: list[str] = None,
 ):
-    repo_url = f"https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}"
+    repo_url = f"https://oauth2:{user.token}@github.com/{settings.nb_github_repo}"
     internal_hub_url = "http://insights-hub-svc.hub.svc.cluster.local"
 
     config.load_incluster_config()
@@ -279,7 +262,7 @@ def spawn_marimo_session(
             {"name": "GIT_COMMITTER_NAME", "value": str(user.name)},
             {"name": "GIT_COMMITTER_EMAIL", "value": str(user.email)},
             # Clean, quote-stripped GitHub credentials from Pydantic settings
-            {"name": "NB_GITHUB_TOKEN", "value": settings.nb_github_token},
+            {"name": "NB_GITHUB_TOKEN", "value": user.token},
             {"name": "NB_GITHUB_REPO", "value": settings.nb_github_repo},
         ]
 
@@ -428,7 +411,7 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace: str = 
     loop = asyncio.get_event_loop()
 
     try:
-        source_code = await fetch_notebook_source_via_git(notebook_path)
+        source_code = await fetch_notebook_source_via_git(notebook_path, user=user)
         missing_packages = detect_missing_deps(source_code)
         verified_packages = []
         if missing_packages:
@@ -519,8 +502,13 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace: str = 
 
 
 
-async def new_notebok(notebook_path: str, user: User, parent_url: str):
-    repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
+async def new_notebok(notebook_path: str, user: User):
+
+    if user is not None and not user.is_authenticated:
+        logger.error(f'Invalid users should not be able to create a new notebook ....')
+        return
+
+    repo_url = f'https://oauth2:{user.token}@github.com/{settings.nb_github_repo}'
 
     # Standard boilerplate for a blank Marimo notebook
     blank_content = textwrap.dedent('''\
@@ -546,9 +534,10 @@ async def new_notebok(notebook_path: str, user: User, parent_url: str):
     loop = asyncio.get_event_loop()
 
     def _push_to_git():
+        git_env = {"GIT_TERMINAL_PROMPT": "0"}
         with tempfile.TemporaryDirectory() as tmpdir:
             # 1. Sparse clone to keep it incredibly fast
-            repo = git.Repo.clone_from(repo_url, tmpdir, branch="main", depth=1)
+            repo = git.Repo.clone_from(repo_url, tmpdir, branch="main", depth=1, env=git_env)
 
             # Configure author
             repo.config_writer().set_value("user", "name", str(user.name)).release()
@@ -566,11 +555,6 @@ async def new_notebok(notebook_path: str, user: User, parent_url: str):
             if push_info and (push_info[0].flags & push_info[0].ERROR):
                 raise Exception(f"Git Push rejected: {push_info[0].summary}")
 
-                # --- NEW: Immediately sync the server's local directory! ---
-            try:
-                sync_repo()
-            except Exception as e:
-                logger.error(f"Failed to run local sync after create: {e}")
 
 
     # Execute the file creation in a background thread to prevent UI freezing
@@ -578,7 +562,7 @@ async def new_notebok(notebook_path: str, user: User, parent_url: str):
 
 
 
-async def open_create_notebook_dialog(current_subpath: str, user: User, parent_url: str):
+async def open_create_notebook_dialog(current_subpath: str, user: User):
     """Opens a dialog to create a blank, named marimo notebook."""
 
     with ui.dialog().classes('backdrop-blur-sm') as dialog, ui.card().classes('w-full max-w-md p-6'):
@@ -603,18 +587,37 @@ async def open_create_notebook_dialog(current_subpath: str, user: User, parent_u
                 rel_path = str(Path(current_subpath) / filename) if current_subpath else filename
 
                 dialog.close()
-                ui.notify(f"Initializing {filename}...", type='info')
+                ui.notify(f"Creating {filename} in GitHub...", type='info')
 
-                await new_notebok(rel_path, user, parent_url)
-                ui.navigate.reload()
-            ui.button("Create & Edit", on_click=handle_create).classes('undp-btn--small primary text-white')
+                try:
+                    # 1. Push the new file to GitHub
+                    await new_notebok(rel_path, user)
+
+                    ui.notify("Syncing server...", type='info')
+
+                    # 2. Safely pull the changes locally WITHOUT freezing the server
+                    await asyncio.to_thread(utils.sync_repo_task, user)
+
+                    # 3. Reload the UI to show the new file
+                    ui.navigate.reload()
+                except Exception as e:
+                    ui.notify(f"Failed: {str(e)}", type='negative')
+
+
+            ui.button("Create", on_click=handle_create).classes('undp-btn--small primary text-white')
 
     dialog.open()
 
 
 async def delete_notebook_git(notebook_path: str, user: User):
     """Uses Git to remove a notebook from the repository and push the deletion."""
-    repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
+
+    if user is not None and not user.is_authenticated:
+        logger.error(f'Invalid users should not be able to delete a notebook')
+        return
+
+
+    repo_url = f'https://oauth2:{user.token}@github.com/{settings.nb_github_repo}'
     loop = asyncio.get_event_loop()
 
     def _push_deletion():
@@ -637,11 +640,7 @@ async def delete_notebook_git(notebook_path: str, user: User):
                 push_info = repo.remote(name='origin').push()
                 if push_info and (push_info[0].flags & push_info[0].ERROR):
                     raise Exception(f"Git Push rejected: {push_info[0].summary}")
-                try:
-                    sync_repo()
-                    ui.navigate.reload()
-                except Exception as e:
-                    logger.error(f"Failed to run local sync after delete: {e}")
+
             else:
                 raise FileNotFoundError("Notebook not found in repository.")
 
@@ -664,6 +663,11 @@ def confirm_delete_notebook(notebook_path: str, notebook_name: str, user: User):
                 ui.notify(f"Deleting {notebook_name}...", type='warning')
                 try:
                     await delete_notebook_git(notebook_path, user)
+
+                    # 2. PULL DELETION: Waits until the server deletes it from local disk
+                    await asyncio.to_thread(utils.sync_repo, user)
+
+                    # 3. RELOAD: The grid refreshes with the file gone
                     ui.notify(f"Successfully deleted {notebook_name}", type='positive')
                     ui.navigate.reload()
                 except Exception as e:

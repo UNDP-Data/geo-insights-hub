@@ -1,14 +1,15 @@
 import asyncio
 import dataclasses
-
+from insightshub import utils
 from nicegui import ui, app
 from pathlib import Path
 from fastapi import Request, Response
-from insightshub.auth import User, sign_in_url, sign_out_url, authenticate, page_url
+from insightshub.auth import User, authenticate, page_url
 from insightshub.config import settings
 from contextlib import asynccontextmanager
 import logging
 from urllib.parse import quote
+from pydantic import SecretStr
 
 
 logger = logging.getLogger(__name__)
@@ -60,25 +61,6 @@ def _asset_url(name: str) -> str:
     return f"/static/{name}?v={version}"
 
 
-def _account_old(request: Request, user: User | None) -> None:
-    if not user.is_authenticated:
-        url = sign_in_url(request)
-        #ui.label(url)
-        ui.button(f"Sign in", ) \
-            .props(f'href="{url}" unelevated no-wrap color=secondary').classes("undp-btn undp-btn--small")
-
-        return
-
-    url = sign_out_url(request)
-    with ui.button(icon="account_circle").props("flat round"):
-        with ui.menu().props('anchor="bottom right" self="top right"'):
-            with ui.column().classes("px-4 py-3 gap-0"):
-                ui.label(user.display_name).classes("font-semibold")
-                ui.label(user.email).classes("text-xs text-grey-7")
-            ui.separator()
-            ui.menu_item("Sign out", on_click=lambda: ui.navigate.to(url)).classes("bg-secondary text-white font-bold uppercase text-center ")
-
-
 def _account(request: Request, user: User | None) -> None:
     is_authenticated = user.is_authenticated
     target_host = settings.public_auth_url
@@ -120,57 +102,19 @@ def _account(request: Request, user: User | None) -> None:
                 .tooltip(f'Connected as {user.email}' if is_authenticated else f'Sign In {user.name} with email: {user.email}')
 
             async def go_auth():
-                logger.info(f'Going to auth {final_url}')
+                logger.info(f'Going to {action} {final_url}')
                 identity_btn.props('loading icon=sync')
                 identity_btn.classes(add='animate-spin')
                 await asyncio.sleep(.1)
                 safe_rd = quote(rd, safe='')
+
+                asyncio.create_task(asyncio.to_thread(utils.sync_repo_task, user))
                 ui.navigate.to(f"/_auth/bounce?action={action}&rd={safe_rd}")
-                #ui.navigate.to(final_url)
 
             identity_btn.on('click', go_auth)
 
 
-def _account_mixed(request: Request, user: User | None) -> None:
-    is_auth = user.is_authenticated
 
-    # Use your theme's secondary color (UNDP_RED) if authenticated, else grey
-    btn_color = "secondary" if is_auth else "grey"
-    tooltip_text = f'Connected as {user.email}' if is_auth else 'Sign In'
-
-    with ui.element('div'):
-        # The Fancy Identity Button
-        identity_btn = ui.button(icon='account_circle') \
-            .props(f'flat round dense color="{btn_color}"') \
-            .classes('w-9 h-9 hover:scale-110 transition') \
-            .tooltip(tooltip_text)
-
-        if not is_auth:
-            # UNAUTHENTICATED: Play the spin animation and navigate to sign in
-            sign_in = sign_in_url(request)
-
-            async def go_auth():
-                identity_btn.props('loading icon=sync')
-                identity_btn.classes(add='animate-spin')
-                await ui.run_javascript('await new Promise(r => requestAnimationFrame(r))')
-                ui.navigate.to(sign_in)
-
-            identity_btn.on('click', go_auth)
-
-        else:
-            # AUTHENTICATED: Open the user profile dropdown menu
-            sign_out = sign_out_url(request)
-
-            with identity_btn:
-                with ui.menu().props('anchor="bottom right" self="top right"'):
-                    with ui.column().classes("px-4 py-3 gap-0"):
-                        ui.label(user.display_name).classes("font-semibold")
-                        ui.label(user.email).classes("text-xs text-grey-7")
-                    ui.separator()
-
-                    # Your customized red, bold, centered Sign Out item
-                    ui.menu_item("Sign out", on_click=lambda: ui.navigate.to(sign_out)) \
-                        .classes("bg-secondary text-white font-bold uppercase text-center")
 
 def _hamburger() -> None:
     with ui.element("button").classes("undp-hamburger") \
@@ -276,14 +220,24 @@ def page_title(title: str) -> None:
         ui.label(title).classes("undp-title")
 
 @asynccontextmanager
-async def standard_page(title: str=None, request:Request = None, response:Response = None):
+async def standard_page(title: str = None, request: Request = None, response: Response = None):
     """A reusable layout with a header, main content area, and footer."""
-    if not 'user' in app.storage.browser:
-        # Instantaneously grab the user from the proxy headers
-        user = await authenticate(url=settings.private_auth_url,request=request, forward_headers=True)
+
+    # 1. Always try extracting/authenticating fresh from the current request first
+    user = await authenticate(url=settings.private_auth_url, request=request, forward_headers=True)
+
+    # 2. If the current request gave us a valid authenticated user, update browser storage
+    if user.is_authenticated:
         app.storage.browser['user'] = dataclasses.asdict(user)
+
     else:
-        user = User(**app.storage.browser['user'])
+        # 3. If current request is a Guest, check if we have a valid cached user in browser storage
+        cached_data = app.storage.browser.get('user')
+        if cached_data:
+            cached_user = User(**cached_data)
+            if cached_user.is_authenticated:
+                user = cached_user
+
 
     load_theme()
     _header(request=request, user=user)

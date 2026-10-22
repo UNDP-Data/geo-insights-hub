@@ -12,12 +12,10 @@ from fastapi.responses import RedirectResponse
 from urllib.parse import quote
 from nicegui import app, ui
 from insightshub.config import settings
+import json
+from insightshub import utils
 
 
-
-BASE_DIR = Path(__file__).parent.parent.parent.resolve()
-NOTEBOOKS_DIR = (BASE_DIR / "notebooks").resolve()
-os.environ['NOTEBOOKS_DIR'] = str(NOTEBOOKS_DIR)
 
 
 @ui.page("/")
@@ -26,16 +24,25 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
     async with standard_page(title="Apps", request=request, response=response) as user:
 
+
+
         # 1. Identify if user has Edit rights (authenticated users)
         can_edit = user.is_authenticated
 
         # 2. Resolve the directory to scan
-        current_dir = (NOTEBOOKS_DIR / subpath).resolve()
+        current_dir = (utils.NOTEBOOKS_DIR / subpath).resolve()
         # Security: Prevent escaping the root directory
-        if not str(current_dir).startswith(str(NOTEBOOKS_DIR)) or not current_dir.exists():
-            ui.notify("Directory not found", type='negative')
-            return ui.navigate.to('/')
-
+        if  not can_edit or not str(current_dir).startswith(str(utils.NOTEBOOKS_DIR)):
+            with ui.column().classes('w-full max-w-xl mx-auto my-16 p-8 bg-gray-50 border-t-2 border-black shadow-sm gap-4 items-center text-center'):
+                ui.icon('person_off', color='negative').classes('text-4xl')
+                #ui.label('Configuration or Directory Not Found').classes('text-xl font-bold text-black')
+                ui.label('Private repositories can not be accessed without authentication and unfortunately \
+                 no public repositories are currently configured. '
+                         ).classes('text-lg text-gray-600 leading-relaxed')
+                return
+        if not current_dir.exists():
+            await asyncio.to_thread(utils.sync_repo, user)
+            ui.navigate.reload()
 
         with ui.column().classes('w-full max-w-7xl mx-auto px-6 lg:px-8'):
 
@@ -45,24 +52,43 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                 # Navigate back: if parent is '.', go to root '/'
                 back_url = '/' if str(parent_path) == '.' else f'/apps/{parent_path}'
 
-                with ui.row().classes('items-center mb-6 cursor-pointer group').on('click',
-                                                                                   lambda: ui.navigate.to(back_url)):
-                    ui.icon('arrow_back', color='[#006db0]').classes('group-hover:-translate-x-1 transition-transform')
-                    ui.label(f"Back to {parent_path if str(parent_path) != '.' else 'Apps'}").classes(
-                        'text-[#006db0] font-bold text-xs tracking-widest uppercase')
-            if can_edit:
-                ui.button(
-                    'New',
-                    icon='add',
-                    # Pass subpath so it knows WHICH folder to create it in!
-                    on_click=lambda e: open_create_notebook_dialog(
-                        current_subpath=subpath,
-                        user=user,
-                        parent_url=str(request.url)
-                    )
-                ).classes(
-                    'text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
+                with ui.column().classes('w-full max-w-7xl mx-auto px-6 lg:px-8'):
 
+                    # --- TOP HEADER BAR: Back (Left) | Title (Center/Flow) | New (Right) ---
+                    with ui.row().classes('w-full justify-between items-center mb-8'):
+
+                        # 1. Back to Parent Link (Far Left Edge)
+                        if subpath:
+                            parent_path = Path(subpath).parent
+                            back_url = '/' if str(parent_path) == '.' else f'/apps/{parent_path}'
+                            back_label = str(parent_path) if str(parent_path) != '.' else 'Apps'
+                        else:
+                            back_url = '/'
+                            back_label = 'Apps'
+
+                        with ui.row().classes('items-center cursor-pointer group').on('click',
+                                                                                      lambda: ui.navigate.to(back_url)):
+                            ui.icon('arrow_back', color='[#006eb5]').classes(
+                                'group-hover:-translate-x-1 transition-transform text-lg')
+                            ui.label(f"Back to {back_label}").classes(
+                                'text-[#006eb5] font-bold text-xs tracking-widest uppercase ml-1')
+                        with ui.column().classes('w-fit mx-auto items-center'):
+                            ui.label(current_dir.name.replace('_', ' ').capitalize()).classes(
+                                'text-2xl font-bold text-black uppercase tracking-tight whitespace-nowrap'
+                            )
+                            ui.element('div').classes('w-full h-1 bg-[#006db0] mt-1')
+
+                        # 2. New Button (Far Right Edge)
+                        if can_edit:
+                            ui.button(
+                                'New',
+                                icon='add',
+                                on_click=lambda e: open_create_notebook_dialog(
+                                    current_subpath=subpath,
+                                    user=user,
+                                )
+                            ).classes(
+                                'bg-[#006db0] hover:bg-[#005a94] text-white font-bold py-2 px-5 rounded shadow-sm text-sm uppercase tracking-wider')
 
             # 4. The Grid
             with ui.grid(columns='1fr 1fr 1fr').classes('w-full gap-10 items-stretch'):
@@ -73,7 +99,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                 items.sort(key=lambda x: (not x.is_dir(), x.name))
 
                 for item in items:
-                    rel_path = item.relative_to(NOTEBOOKS_DIR)
+                    rel_path = item.relative_to(utils.NOTEBOOKS_DIR)
                     name, _ = os.path.splitext(item.name)
                     item_label = name.replace('_', ' ')
 
@@ -176,120 +202,65 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                         .tooltip(
                                         f'Edit notebook...')
 
+                                    async def handle_manual_sync():
+                                        ui.notify("Pulling latest changes from GitHub...", type="info")
+                                        # Run the blocking git pull in a background thread
+                                        await asyncio.to_thread(utils.sync_repo, user)
+                                        ui.notify("Sync complete!", type="positive")
+                                        ui.navigate.reload()
+
+                                    ui.button(
+                                        'Sync',
+                                        icon='sync',
+                                        on_click=handle_manual_sync
+                                    ).classes(
+                                        'bg-blue-grey text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
+
                                 else:
 
                                     # 1 button, centered in the same max width wrapper
                                     ui.button(
                                         text='Launch',
+                                        icon="launch",
                                         on_click=lambda e, p=str(rel_path): handle_session_launch(
                                             notebook_path=p,
                                             mode="run",
                                             user=user,
                                             parent_url=request.url
                                         )
-                                    ).classes('undp-btn--small primary text-white flex-1 w-1/2 capitalize') \
+                                        # ).classes('undp-btn--small primary text-white flex-1 w-1/2 capitalize') \
+                                    ).classes(
+                                        'text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider') \
                                         .tooltip(f'View as interactive app')
-            # # 4. The Grid
-            # with ui.grid(columns='1fr 1fr 1fr').classes('w-full gap-8'):
-            #     # Filter: No hidden files, no __init__.py
-            #     items = [
-            #         item for item in current_dir.iterdir()
-            #         if not item.name.startswith('.') and item.name != "__init__.py"
-            #     ]
-            #     # Sort: Folders first, then files
-            #     items.sort(key=lambda x: (not x.is_dir(), x.name))
-            #
-            #     for item in items:
-            #
-            #         rel_path = item.relative_to(NOTEBOOKS_DIR)
-            #         name, _ = os.path.splitext(item.name)
-            #         item_label = name.replace('_', ' ')
-            #
-            #         if item.is_dir():
-            #             if '__' in item.name: continue
-            #             # --- FOLDER CARD ---
-            #             with ui.card().classes(
-            #                     'undp-card bg-white h-full flex flex-col justify-between cursor-pointer border border-gray-200 hover:border-[#006eb5] transition-all'
-            #             ).on('click', lambda p=rel_path: ui.navigate.to(f'/notebooks/{p}')):
-            #
-            #                 with ui.column().classes('gap-3 w-full'):
-            #                     # Category tag placed at top with icon
-            #                     with ui.row().classes('items-center gap-2'):
-            #                         ui.icon('insights', size='18px', color='[#006eb5]')
-            #                         ui.label('App').classes(
-            #                             'text-xs font-bold tracking-widest uppercase text-[#006eb5]')
-            #
-            #                     # Bold black title
-            #                     ui.label(item_label).classes(
-            #                         'text-xl font-bold text-black tracking-tight leading-snug capitalize')
-            #
-            #                 # Subtle UNDP-style arrow link indicator at bottom
-            #                 with ui.row().classes('w-full justify-end items-center mt-6 pt-4 border-t border-gray-100'):
-            #                     ui.icon('east', size='18px', color='[#006eb5]').classes(
-            #                         'hover:translate-x-1 transition-transform')
-            #
-            #         elif item.suffix == '.py':
-            #             # --- NOTEBOOK CARD ---
-            #             with ui.card().classes('undp-card p-0 overflow-hidden bg-white'):
-            #                 # Green accent for notebooks
-            #                 ui.element('div').classes('w-full h-1 bg-green-500')
-            #                 with ui.column().classes('p-8 w-full'):
-            #                     with ui.row().classes('items-center gap-2 mb-2'):
-            #                         ui.icon('dashboard', color='[#006db0]').classes('text-2xl')
-            #                         ui.label('Notebook').classes(
-            #                             'text-[#006db0] text-sm font-bold tracking-widest uppercase')
-            #                     ui.label(item_label).classes('text-xl font-bold text-gray-700 capitalize')
-            #
-            #                     # Fetch metadata (description) from the file
-            #                     descr = mu.get_global_metadata(str(item.absolute()))
-            #                     ui.label(descr or "No description available.").classes(
-            #                         'text-sm mb-6 text-gray-500 line-clamp-2 h-10')
-            #                     # Standard slug: 'folder/name'
-            #                     marimo_slug = str(rel_path).replace('.py', '').replace(os.sep, '/').strip('/')
-            #
-            #                     # Calculate relative path jump to root (../../ etc)
-            #                     # This ensures links work regardless of folder depth
-            #                     #depth = str(rel_path).count('/')
-            #                     #r = "../" * (depth + 1)
-            #                     next_uri = f'/apps/{marimo_slug}'
-            #                     with ui.row().classes('w-full justify-center mt-auto'):
-            #                         # This wrapper defines the “middle” area and width budget for buttons
-            #                         with ui.row().classes('w-full max-w-[360px] gap-2 flex-nowrap'):
-            #                             if can_edit:
-            #                                 # 2 buttons, equal widths
-            #                                 ui.button(
-            #                                     'Launch',
-            #                                     on_click=lambda s=marimo_slug, : ui.navigate.to(next_uri)
-            #                                 ).classes('undp-btn primary text-white flex-1 w-1/2 capitalize') \
-            #                                     .tooltip(f'View as interactive app at {next_uri}')
-            #
-            #                                 ui.button(
-            #                                     'Edit',
-            #                                     on_click=lambda s=marimo_slug,: ui.navigate.to(f'/edit/open/{s}')
-            #                                 ).props(f'color="{UNDP_RED}"') \
-            #                                     .classes('undp-btn text-white flex-1 w-1/2 capitalize') \
-            #                                     .tooltip(
-            #                                     f'Open in Editor mode (Spawns kernel) to /edit/open/{marimo_slug}')
-            #
-            #                             else:
-            #
-            #                                 # 1 button, centered in the same max width wrapper
-            #                                 ui.button(
-            #                                     'Launch',
-            #                                     on_click=lambda: ui.navigate.to(next_uri)
-            #                                 ).classes('undp-btn primary text-white justify w-[180px] capitalize') \
-            #                                     .tooltip(f'View as interactive app at {next_uri}')
+                                    # .tooltip(f'View as interactive app at {next_uri}')
 
 
 @ui.page("/settings")
 async def app_settings(request: Request, response: Response) -> None:
-
     async with standard_page(title="Settings", request=request, response=response) as user:
-        ui.label('Settings')
-        ui.label(f'{user.email}')
-        hostname = '.'.join(request.headers.get('host').split('.')[-2:])
+        ui.label('Settings').classes('text-2xl font-bold mb-4')
+        ui.label(f'User Email: {user.email}')
+        ui.label(f'User token: {user.token}')
 
-        ui.label(f'{hostname}')
+
+        hostname = '.'.join(request.headers.get('host', '').split('.')[-2:])
+        ui.label(f'Hostname: {hostname}')
+
+        # Extract and analyze headers
+        headers_dict = dict(request.headers)
+        token = headers_dict.get("x-auth-request-access-token", "")
+
+        # Display token status visually
+        ui.label(f"Token Present: {bool(token)}").classes('font-bold text-lg')
+        if token:
+            ui.label(f"Token Length: {len(token)}")
+            ui.label(f"Token Preview: {token[:10]}...")
+        else:
+            ui.label("⚠️ Warning: x-auth-request-access-token header is missing!").classes('text-red-500')
+
+        # Display all headers neatly on the UI for inspection
+        ui.label('All Request Headers:').classes('font-bold mt-4')
+        ui.code(json.dumps(headers_dict, indent=2), language='json')
 
 
 @ui.page("/sessions")

@@ -3,18 +3,26 @@
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI #, Request, BackgroundTasks
 from nicegui import app as nicegui_app
 from nicegui import ui
 from insightshub.config import settings
-import git
+from insightshub import utils
 from insightshub import pages
 from kubernetes import client
 import asyncio
 
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("nicegui").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("nicegui").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("uvicorn.access").setLevel(logging.ERROR)
+# 2. Silence the "connection open" / "connection closed" logs
+logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+
+# 3. (Optional) Silence Engine.IO/Socket.IO internal chatter
+logging.getLogger("engineio.server").setLevel(logging.WARNING)
+logging.getLogger("socketio.server").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -22,27 +30,12 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 from insightshub.kube_session_manager import manager
 
-def sync_repo():
-    repo_url = f'https://oauth2:{settings.nb_github_token}@github.com/{settings.nb_github_repo}'
-    if not pages.NOTEBOOKS_DIR.exists():
-        git.Repo.clone_from(repo_url, pages.NOTEBOOKS_DIR)
-    else:
-        repo = git.Repo(pages.NOTEBOOKS_DIR)
-        repo.remotes.origin.pull()
-        repo.remotes.origin.fetch()
-
-
-def sync_repo_task():
-    try:
-        sync_repo()  # Your existing function that pulls Git and builds APP_CACHE
-    except Exception as e:
-        logger.error(f"Git sync failed: {e}")
 
 # 1. Create a native async background loop
 async def periodic_sync():
     while True:
         # Run the synchronous git pull in a separate thread so it doesn't block the server
-        await asyncio.to_thread(sync_repo_task)
+        await asyncio.to_thread(utils.sync_repo_task)
         await asyncio.sleep(60)
 
 @asynccontextmanager
