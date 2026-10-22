@@ -248,15 +248,8 @@ async def standard_page(title: str = None, request: Request = None, response: Re
         # If they logged out, ensure the cached user data is wiped
         if not user.is_authenticated:
             app.storage.browser.pop('user', None)
+        await asyncio.to_thread(gitui.sync_repo_task, user)
 
-        # 2. Define the background task
-        async def run_sync_and_refresh():
-            #ui.notify('Syncing workspace...', type='info', position='top')
-            await asyncio.to_thread(gitui.sync_repo_task, user)
-            ui.navigate.reload()
-
-        # 3. Fire it safely
-        ui.timer(0.1, run_sync_and_refresh, once=True)
     load_theme()
     _header(request=request, user=user)
     with ui.column().classes("undp-container undp-main"):
