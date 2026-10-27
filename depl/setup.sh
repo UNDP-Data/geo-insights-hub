@@ -9,11 +9,19 @@ echo "==> [1/5] Creating KinD Cluster..."
   ./create.sh
 )
 
-echo "==> [2/5] Starting Cloud Provider KinD & Gateway..."
+echo "==> [2/5] Starting Cloud Provider KinD"
 (
   cd "${ROOT_DIR}/ingress/cloud-provider-kind"
   ./install.sh
 )
+
+echo "==> [4/5] Installing Envoy  Gateway API..."
+(
+  cd "${ROOT_DIR}/ingress/gateway"
+  ./install.sh
+
+)
+
 
 echo "==> [3/5] Installing Cert-Manager & Certificates..."
 (
@@ -21,12 +29,16 @@ echo "==> [3/5] Installing Cert-Manager & Certificates..."
   ./install.sh
 )
 
+
+
 echo "==> [4/5] Installing OAuth & Auth Routes..."
 (
   cd "${ROOT_DIR}/oauth"
   ./install.sh
 
 )
+
+
 
 echo "==> [5/5] Installing Insights Hub..."
 (

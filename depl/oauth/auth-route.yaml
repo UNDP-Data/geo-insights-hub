@@ -17,3 +17,47 @@ spec:
       backendRefs:
         - name: github-oauth-oauth2-proxy
           port: 80
+
+---
+# 1. Allow the SecurityPolicy in 'default' to reference the proxy Service in 'auth'
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: ext-auth-grant
+  namespace: ${NAMESPACE}
+spec:
+  from:
+  - group: gateway.envoyproxy.io
+    kind: SecurityPolicy
+    namespace: ${GATEWAY_NAMESPACE}
+  to:
+  - group: ""
+    kind: Service
+    name: github-oauth-oauth2-proxy
+
+---
+# 2. Instruct Envoy Gateway to authenticate and forward headers
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: oauth2-proxy-extauth
+  namespace: ${GATEWAY_NAMESPACE}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      #name: ${GATEWAY_NAME}   # <--- Updated to match the Gateway name dynamically
+      name: github-oauth-route   # <--- Updated to match the Gateway name dynamically
+  extAuth:
+    http:
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: github-oauth-oauth2-proxy
+          namespace: ${NAMESPACE}
+          port: 80 # Match this to your proxy service's exposed port (usually 80 or 4180)
+      headersToBackend:
+        - "x-auth-request-user"
+        - "x-auth-request-email"
+        - "x-auth-request-access-token"
+        - "x-auth-request-groups"

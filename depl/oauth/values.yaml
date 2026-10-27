@@ -9,7 +9,7 @@ config:
     github_team = "${OAUTH_TEAM_NAME}"
     scope = "user:email,read:org,repo"
     redirect_url = "https://${AUTH_SUBDOMAIN}.${BASE_DOMAIN}/oauth2/callback"
-    cookie_secure = false
+    cookie_secure = true
     reverse_proxy = true
     set_xauthrequest = true
     pass_user_headers = true

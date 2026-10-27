@@ -1,25 +1,30 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -eo pipefail
 
-# Determine the directory where this script resides
-SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+cd "${SCRIPT_DIR}"
 
-kubectl delete httproute --all --all-namespaces
-kubectl delete gateway --all --all-namespaces
-
-echo "Deleting ingress..."
-helm uninstall eg -n envoy-gateway-system 2>/dev/null || true
-
-# Delete Envoy Gateway CRDs if they exist
-ENVOY_CRDS=$(kubectl get crd -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep 'gateway.envoyproxy.io')
-if [ -n "$ENVOY_CRDS" ]; then
-  echo "$ENVOY_CRDS" | xargs kubectl delete crd
+if [ -f "${SCRIPT_DIR}/.env" ]; then
+  set -a
+  source "${SCRIPT_DIR}/.env"
+  set +a
 fi
 
-# Delete standard Gateway API CRDs if they exist
-GW_CRDS=$(kubectl get crd -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep 'gateway.networking.k8s.io')
-if [ -n "$GW_CRDS" ]; then
-  echo "$GW_CRDS" | xargs kubectl delete crd
+export GATEWAY_NAME="${GATEWAY_NAME:-cluster-gateway}"
+export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-default}"
+
+echo "==> [gateway] Removing Gateway resource..."
+if [ -f "${SCRIPT_DIR}/gateway.yaml" ]; then
+  envsubst < "${SCRIPT_DIR}/gateway.yaml" | kubectl delete -f - --ignore-not-found=true 2>/dev/null || true
 fi
 
-# Remove namespace
-kubectl delete namespace envoy-gateway-system --ignore-not-found=true
+
+echo "==> [gateway] Removing Gateway API CRDs..."
+kubectl get crd -o name 2>/dev/null | grep 'gateway.networking.k8s.io' | xargs -r kubectl delete --ignore-not-found=true
+
+
+echo "==> [gateway] Uninstalling Envoy Gateway Controller..."
+helm uninstall eg -n envoy-gateway-system --ignore-not-found 2>/dev/null || true
+kubectl delete namespace envoy-gateway-system --ignore-not-found 2>/dev/null || true
+
+echo "==> [gateway] Teardown complete."

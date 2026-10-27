@@ -1,0 +1,12 @@
+services:
+  cloud-provider-kind:
+    build:
+      context: https://github.com/kubernetes-sigs/cloud-provider-kind.git#main
+    container_name: cloud-provider-kind
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - --gateway-channel
+      - standard

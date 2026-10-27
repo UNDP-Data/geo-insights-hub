@@ -1,21 +1,31 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
-  name: eg
+  name: ${GATEWAY_CLASS_NAME}
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: cluster-gateway
-  namespace: default
+  name: ${GATEWAY_NAME}
+  namespace: ${GATEWAY_NAMESPACE}
 spec:
-  gatewayClassName: eg
+  gatewayClassName: ${GATEWAY_CLASS_NAME}
   listeners:
   - name: http
-    protocol: HTTP
     port: 80
+    protocol: HTTP
     allowedRoutes:
       namespaces:
-        from: All   # Allows any namespace across the cluster to attach routes
+        from: All
+  - name: https-wildcard
+    port: 443
+    protocol: HTTPS
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: ${CERT_SECRET_NAME}
+    allowedRoutes:
+      namespaces:
+        from: All
