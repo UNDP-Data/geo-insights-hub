@@ -14,6 +14,7 @@ import asyncio
 from fastapi.responses import RedirectResponse
 from urllib.parse import quote
 from nicegui import app, ui
+
 from insightshub.config import settings
 import json
 from insightshub import gitui
@@ -44,49 +45,48 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
         # Authenticated users have editing rights; guests have read-only rights
         can_edit = bool(user and user.is_authenticated)
 
-        # 3. Synchronize / Checkout if directory is not on disk yet
+        # 3. Strict Zero-Trust Block: Directory is missing
         if not current_dir.exists():
-            logger.info(f"Directory missing on disk. Attempting sync (can_edit={can_edit})...")
-
-            # Attempts public clone if guest, or authenticated clone if logged in
-            sync_success = await asyncio.to_thread(gitui.sync_repo_task, user=user)
-
-            if sync_success and current_dir.exists():
-                ui.navigate.reload()
-                return
-
-            # If sync failed: this only happens if the repo is private or network dropped
             with ui.column().classes(
                     'w-full max-w-xl mx-auto my-24 p-10 bg-white border-t-2 border-black shadow-sm gap-6 items-center text-center'
             ):
-                ui.icon('lock_outline', color='negative').classes('text-5xl')
-                with ui.column().classes('gap-1 items-center'):
-                    ui.label('ACCESS RESTRICTED').classes('text-xs font-bold tracking-widest text-red-600 uppercase')
-                    ui.label('Authentication Required').classes('text-2xl font-bold text-black')
+                ui.icon('folder_off', color='negative').classes('text-5xl')
                 ui.html(
-                    f'The repository <span class="text-red-600 font-bold">{settings.nb_github_repo}</span> cannot be accessed without authorization. '
-                    'Please sign in with GitHub to view and sync workspaces.'
+                    f'The notebooks directory is currently empty on this server. '
+                    f'You must be authenticated to check out the <span class="text-red-600 font-bold">{settings.nb_github_repo}</span> workspace.'
                 ).classes('text-sm text-gray-600 leading-relaxed')
 
+                # If they are NOT logged in, show the Sign In button
                 if not can_edit:
-
                     sign_in_button = ui.button('Sign In', icon='login') \
                         .props('color="negative" unelevated') \
                         .classes('font-bold uppercase tracking-wide hover:scale-105 transition-transform px-6 py-2')
 
                     async def go_auth():
-                        # Add the native Quasar loading state (shows a spinner automatically)
-                        sign_in_button.props(add='loading')
+                        # Clear stale cache before bounce
+                        app.storage.browser.pop('user', None)
 
+                        sign_in_button.props(add='loading')
                         await asyncio.sleep(0.1)
                         safe_rd = quote(page_url(request), safe='')
                         ui.navigate.to(f"/_auth/bounce?action=start&rd={safe_rd}")
 
                     sign_in_button.on('click', go_auth)
 
+                # If they ARE logged in, show the manual Sync button
                 else:
-                    ui.button('Retry Sync', icon='refresh', on_click=lambda: ui.navigate.reload())
+                    pass
+                    # Trigger the sync explicitly using the authenticated user's token
+                    sync_success = await asyncio.to_thread(gitui.sync_repo_task, user=user)
+
+                    if sync_success and current_dir.exists():
+                        ui.navigate.reload()
+
+
+            # CRITICAL: Return here so the page stops drawing and DOES NOT try to read the empty directory!
             return
+
+
 
         with ui.column().classes('w-full max-w-7xl mx-auto px-6 lg:px-8'):
 
@@ -250,7 +250,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                             parent_url=request.url)) \
                                         .props('unelevated') \
                                         .style('min-height: 28px; padding: 0 5px !important;') \
-                                        .classes('bg-[#006eb5] text-white font-bold text-xs tracking-wide') \
+                                        .classes('bg-[#006eb5] text-white font-bold text-xs tracking-wide hover:scale-110 transition') \
                                         .tooltip(f'View as interactive app')
 
 
@@ -265,7 +265,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                             parent_url=request.url)) \
                                         .props('unelevated') \
                                         .style('min-height: 28px; padding: 0 5px !important;') \
-                                        .classes('bg-[#006eb5] text-white font-bold text-xs tracking-wide') \
+                                        .classes('bg-[#006eb5] text-white font-bold text-xs tracking-wide hover:scale-110 transition') \
                                         .tooltip(f'Edit notebook...')
                                     ui.button(
                                         'Delete',
@@ -276,7 +276,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                         )) \
                                         .props('unelevated') \
                                         .style('min-height: 28px; padding: 0 5px !important;') \
-                                        .classes('bg-[#006eb5] text-white font-bold text-xs tracking-wide') \
+                                        .classes('bg-[#006eb5] text-white font-bold text-xs tracking-wide hover:scale-110 transition') \
                                         .tooltip(
                                         f'Delete notebook...')
 
@@ -295,7 +295,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                         )
                                         # ).classes('undp-btn--small primary text-white flex-1 w-1/2 capitalize') \
                                     ).classes(
-                                        'text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider') \
+                                        'text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider hover:scale-110 transition') \
                                         .tooltip(f'View as interactive app')
                                     # .tooltip(f'View as interactive app at {next_uri}')
 
@@ -453,3 +453,11 @@ def auth_bounce(action: str, rd: str):
 
     # 3. Instantly redirect the browser (No UI is rendered)
     return RedirectResponse(final_url)
+
+@ui.page('/datasets')
+
+async def datasets(request:Request, response:Response)->None:
+
+    async with standard_page(title="Datasets", request=request, response=response) as user:
+        ui.label(f'Most useful datasets for {user.email}')
+        ui.label(manager.get_user_sessions(user_email=user.email))

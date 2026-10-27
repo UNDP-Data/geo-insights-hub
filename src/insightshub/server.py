@@ -41,16 +41,16 @@ async def periodic_sync():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    poll_task = asyncio.create_task(periodic_sync())
+    #poll_task = asyncio.create_task(periodic_sync())
     # --- STARTUP ---
     # 1. Start cluster polling and discover active jobs
     await manager.startup()
     yield  # Application (and NiceGUI) runs here
-    poll_task.cancel()
+    #poll_task.cancel()
     # Stop the manager polling loop
     await manager.shutdown()
 
-app = FastAPI(title=settings.app_name, lifespan=None)
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 
 

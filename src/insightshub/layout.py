@@ -22,8 +22,9 @@ REPO_URL = "https://github.com/UNDP-Data/geo-careatlas"
 
 NAV_ITEMS = [
     ("Apps", "/"),
-    ("Settings", "/settings"),
+    ("Datasets", "/datasets"),
     ("Docs", "/docs"),
+    ("Settings", "/settings"),
 
 ]
 

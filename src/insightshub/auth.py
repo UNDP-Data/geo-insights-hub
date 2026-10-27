@@ -32,7 +32,7 @@ class User:
     @property
     def is_authenticated(self) -> bool:
         """Checks if the user is authenticated (not a default Guest)."""
-        return self.name != 'Guest' and self.email and self.token
+        return bool(self.name != 'Guest' and self.email and self.token)
 
 
 
@@ -128,6 +128,7 @@ async def authenticate(url: str, request: Request, forward_headers: bool = False
                 "X-Forwarded-Proto": request.headers.get("x-forwarded-proto", request.url.scheme),
                 "X-Forwarded-Host": request.headers.get("x-forwarded-host", request.headers.get("host", "")),
                 "X-Forwarded-Uri": request.url.path + (("?" + request.url.query) if request.url.query else ""),
+
             }
             ua = request.headers.get("user-agent")
             if ua:
@@ -139,7 +140,7 @@ async def authenticate(url: str, request: Request, forward_headers: bool = False
                 token = response.headers.get("x-auth-request-access-token", "")
                 email = response.headers.get("x-auth-request-email", "")
                 groups_raw = response.headers.get("x-auth-request-groups", "")
-                groups = [g.strip() for g in groups_raw.split(",")] if groups_raw else []
+                groups = tuple([g.strip() for g in groups_raw.split(",")] if groups_raw else [])
                 username = response.headers.get("x-auth-request-user", "Guest")
 
                 if forward_headers:
