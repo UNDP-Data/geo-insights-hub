@@ -36,7 +36,7 @@ def repo_is_public(repo_name: str) -> bool:
 def get_repo_url(user: User = None, repo_name=settings.nb_github_repo):
     """Returns the URL for cloning/pulling."""
     if repo_name.endswith('.git'):
-        repo_name = repo_name[:-4]
+        repo_name, _ = repo_name.split('.git')
 
     is_public = repo_is_public(repo_name=repo_name)
     if is_public:
@@ -46,6 +46,7 @@ def get_repo_url(user: User = None, repo_name=settings.nb_github_repo):
     # Private repos MUST include the token to be checked out at all
     if user and user.is_authenticated and getattr(user, 'token', None):
         return f"https://x-access-token:{user.token}@github.com/{repo_name}.git"
+        #return f"https://{user.name}:{user.token}@github.com/{repo_name}.git"
 
     return None
 
@@ -56,7 +57,7 @@ def get_push_url(user: User, repo_name=settings.nb_github_repo) -> str:
         raise PermissionError("Authenticated user with a valid token is required to push to GitHub.")
 
     if repo_name.endswith('.git'):
-        repo_name = repo_name[:-4]
+        repo_name, _ = repo_name.split('.git')
 
     return f"https://x-access-token:{user.token}@github.com/{repo_name}.git"
 
@@ -97,6 +98,7 @@ def sync_repo_task(user: User = None) -> bool:
         err = str(e)
         if any(msg in err for msg in
                ["could not read Username", "Authentication failed", "exit code(128)", "exit code(1)"]):
+            logger.error(e)
             logger.warning(
                 f"Sync skipped: Repository '{settings.nb_github_repo}' is private or requires "
                 "an authenticated user token."
