@@ -64,14 +64,13 @@ def get_push_url(user: User, repo_name=settings.nb_github_repo) -> str:
 
 def sync_repo(user: User = None) -> bool:
     """Synchronizes the local notebooks directory with GitHub."""
-    logger.info(f"Syncing repo for user: {user.name}")
 
     git_env = {"GIT_TERMINAL_PROMPT": "0"}
     repo_url = get_repo_url(user=user)
     if repo_url is None:
         # with caution, the user is not authenticated, repo is private, needs tor be DELETED
-        if NOTEBOOKS_DIR.exists():
-            shutil.rmtree(NOTEBOOKS_DIR)
+        # if NOTEBOOKS_DIR.exists():
+        #     shutil.rmtree(NOTEBOOKS_DIR)
         return False
 
     with _repo_lock:
@@ -140,6 +139,7 @@ async def new_notebok(notebook_path: str, user: User):
         return
 
     repo_url = get_repo_url(user=user)
+
 
     blank_content = textwrap.dedent('''\
         import marimo

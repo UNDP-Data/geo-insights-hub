@@ -7,10 +7,9 @@ from fastapi import FastAPI #, Request, BackgroundTasks
 from nicegui import app as nicegui_app
 from nicegui import ui
 from insightshub.config import settings
-from insightshub import utils
 from insightshub import pages
+from insightshub.auth import CustomHeaderMiddleware
 from kubernetes import client
-import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("nicegui").setLevel(logging.ERROR)
@@ -32,27 +31,19 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 
-# 1. Create a native async background loop
-async def periodic_sync():
-    while True:
-        # Run the synchronous git pull in a separate thread so it doesn't block the server
-        await asyncio.to_thread(utils.sync_repo_task)
-        await asyncio.sleep(60)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    #poll_task = asyncio.create_task(periodic_sync())
     # --- STARTUP ---
     # 1. Start cluster polling and discover active jobs
     await manager.startup()
     yield  # Application (and NiceGUI) runs here
-    #poll_task.cancel()
     # Stop the manager polling loop
     await manager.shutdown()
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
-
+app.add_middleware(CustomHeaderMiddleware)
 
 
 # @app.post("/git/sync")

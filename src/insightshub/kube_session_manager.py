@@ -37,6 +37,8 @@ class KubeMarimoSession:
         if self.hostname:
             return f"https://{self.hostname}"
         return f"/session/{self.session_id}"
+    def __str__(self):
+        return f'{self.job_name} {self.status} owned by {self.owner}'
 
 
 class KubeMarimoManager:
