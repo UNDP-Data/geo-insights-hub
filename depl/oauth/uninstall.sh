@@ -1,39 +1,29 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
+# 1. Locate script directory and load environment variables if present
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
-# Source .env to retrieve target namespace
 if [ -f "$SCRIPT_DIR/.env" ]; then
-  # shellcheck source=/dev/null
-  . "$SCRIPT_DIR/.env"
+    set -a
+    . "$SCRIPT_DIR/.env"
+    set +a
 else
-  echo "[-] Warning: .env not found at $SCRIPT_DIR/.env. Falling back to default namespace."
+    # Fallback defaults if .env is missing
+    NAMESPACE="${NAMESPACE:-auth}"
+    AUTH_SUBDOMAIN="${AUTH_SUBDOMAIN:-auth}"
+    BASE_DOMAIN="${BASE_DOMAIN:-undpgeohub.org}"
 fi
 
-NAMESPACE="${NAMESPACE:-default}"
+echo "==> Starting teardown of OAuth2 authentication resources..."
 
-echo "=================================================="
-echo "==> Uninstalling OAuth2 Proxy & Associated Resources"
-echo "=================================================="
+# 2. Delete Envoy Gateway routing resources in the default namespace
+echo "==> Removing HTTPRoute for ${AUTH_SUBDOMAIN}.${BASE_DOMAIN}..."
+kubectl delete httproute github-oauth-route -n default --ignore-not-found
 
-echo "[*] Removing Helm release 'github-oauth' from namespace '${NAMESPACE}'..."
-helm uninstall github-oauth -n "${NAMESPACE}" 2>/dev/null || true
+# 3. Delete the auth namespace (this automatically cascades and destroys
+#    the deployment, services, secrets, and ReferenceGrant inside it)
+echo "==> Deleting namespace '${NAMESPACE}' and all internal resources..."
+kubectl delete namespace "${NAMESPACE}" --ignore-not-found
 
-echo "[*] Deleting Gateway API HTTPRoute from namespace '${NAMESPACE}'..."
-kubectl delete httproute github-oauth-route -n "${NAMESPACE}" --ignore-not-found=true
-
-echo "[*] Deleting cert-manager Certificate and TLS secret..."
-kubectl delete certificate auth-cert -n default --ignore-not-found=true
-kubectl delete secret auth-cert -n default --ignore-not-found=true
-#deleteauth route
-kubectl delete -f $SCRIPT_DIR/auth-route.yaml --ignore-not-found=true
-
-# Optional: Prompt to purge the entire namespace if not default/kube-system
-if [ "${NAMESPACE}" != "default" ] && [ "${NAMESPACE}" != "kube-system" ]; then
-  kubectl delete namespace $NAMESPACE --ignore-not-found=true
-fi
-
-
-
-echo "==> Uninstallation complete."
+echo "==> Teardown complete. All OAuth2 proxy and gateway components have been removed."

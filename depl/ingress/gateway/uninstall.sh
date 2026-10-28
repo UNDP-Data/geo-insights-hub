@@ -24,7 +24,7 @@ kubectl get crd -o name 2>/dev/null | grep 'gateway.networking.k8s.io' | xargs -
 
 
 echo "==> [gateway] Uninstalling Envoy Gateway Controller..."
-helm uninstall eg -n envoy-gateway-system --ignore-not-found 2>/dev/null || true
+helm uninstall $GATEWAY_CLASS_NAME -n envoy-gateway-system --ignore-not-found 2>/dev/null || true
 kubectl delete namespace envoy-gateway-system --ignore-not-found 2>/dev/null || true
 
 echo "==> [gateway] Teardown complete."

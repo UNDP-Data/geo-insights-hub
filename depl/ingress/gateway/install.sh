@@ -11,10 +11,10 @@ if [ -f "${SCRIPT_DIR}/.env" ]; then
   set +a
 fi
 
-export CERT_SECRET_NAME="${CERT_SECRET_NAME:-wildcard-${BASE_DOMAIN//./-}-tls}"
-export GATEWAY_NAME="${GATEWAY_NAME:-cluster-gateway}"
-export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-default}"
-export GATEWAY_CLASS_NAME="${GATEWAY_CLASS_NAME:-eg}"
+#export CERT_SECRET_NAME="${CERT_SECRET_NAME:-wildcard-${BASE_DOMAIN//./-}-tls}"
+#export GATEWAY_NAME="${GATEWAY_NAME:-cluster-gateway}"
+#export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-default}"
+#export GATEWAY_CLASS_NAME="${GATEWAY_CLASS_NAME:-eg}"
 
 # 2. Install Envoy Gateway
 echo "==> [gateway] Installing Envoy Gateway..."
@@ -22,7 +22,7 @@ echo "==> [gateway] Installing Envoy Gateway..."
 kubectl delete job eg-gateway-helm-certgen -n envoy-gateway-system --ignore-not-found
 kubectl delete secret eg-admission -n envoy-gateway-system --ignore-not-found
 
-helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm \
+helm upgrade --install $GATEWAY_CLASS_NAME oci://docker.io/envoyproxy/gateway-helm \
   --version v0.0.0-latest \
   --namespace envoy-gateway-system \
   --create-namespace \

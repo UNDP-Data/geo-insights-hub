@@ -10,6 +10,7 @@ config:
     scope = "user:email,read:org,repo"
     redirect_url = "https://${AUTH_SUBDOMAIN}.${BASE_DOMAIN}/oauth2/callback"
     cookie_secure = true
+    cookie_httponly = true
     reverse_proxy = true
     set_xauthrequest = true
     pass_user_headers = true
