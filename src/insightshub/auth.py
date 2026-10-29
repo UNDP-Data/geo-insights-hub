@@ -9,6 +9,7 @@ import hmac
 import base64
 import hashlib
 from starlette.middleware.base import BaseHTTPMiddleware
+import time
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
 try:
@@ -19,7 +20,9 @@ except ImportError:
     from cryptography.hazmat.primitives.ciphers.modes import CFB
 
 logger = logging.getLogger(__name__)
-
+# Lightweight in-memory cache to prevent GitHub API rate limiting
+# Maps token string -> expiration timestamp
+_VALIDATED_TOKENS = {}
 
 @dataclass(frozen=True)
 class User:
@@ -362,6 +365,45 @@ async def authenticateo(request: Request, forward_headers: bool = False) -> User
     return User()
 
 
+async def verify_github_token(token: str) -> bool:
+    """
+    Verifies that the GitHub token is alive and contains the 'repo' scope.
+    Caches successful validations for 5 minutes.
+    """
+    if not token:
+        return False
+
+    now = time.time()
+    # 1. Return True immediately if validated in the last 5 minutes
+    if token in _VALIDATED_TOKENS and now < _VALIDATED_TOKENS[token]:
+        return True
+
+    # 2. Make a fast HEAD request to GitHub to verify identity and scopes
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        try:
+            response = await client.head(
+                "https://api.github.com/user",
+                headers={"Authorization": f"token {token}", "User-Agent": "InsightsHub"}
+            )
+
+            if response.status_code == 200:
+                scopes = response.headers.get("x-oauth-scopes", "")
+                if "repo" in scopes:
+                    # Cache the successful validation for 300 seconds (5 mins)
+                    _VALIDATED_TOKENS[token] = now + 300
+                    return True
+                else:
+                    logger.warning("Token is active but missing 'repo' scope.")
+            else:
+                logger.warning(f"Token rejected by GitHub (HTTP {response.status_code}).")
+
+        except Exception as e:
+            logger.error(f"GitHub token verification unreachable: {e}")
+            # Optional: Return True here if you want to 'fail open' during GitHub outages
+            return True
+
+    return False
+
 def _save_headers_for_middleware(request: Request, user: User) -> None:
     """Stores user headers in request.state so CustomHeaderMiddleware stamps the browser response."""
     request.state.auth_headers = {
@@ -379,65 +421,74 @@ async def authenticate(
         forward_headers: bool = False,
 ) -> User:
     """
-    Authenticates the user using a 3-tier strategy:
-    1. Incoming Request Headers (if injected by reverse proxy)
-    2. Local _oauth2_proxy Cookie decryption (0ms latency on consecutive loads)
-    3. Remote httpx call to oauth2-proxy /oauth2/auth endpoint (fallback)
+    Authenticates the user using a 3-tier strategy and verifies the GitHub token.
     """
-    # ---------------------------------------------------------
-    # 1. Check incoming REQUEST headers (NOT response.headers!)
-    # ---------------------------------------------------------
-    user = user_from_headers(headers=request.headers)
-    if user.is_authenticated:
-        if forward_headers:
-            _save_headers_for_middleware(request, user)
-        return user
+    candidate_user = User()
 
     # ---------------------------------------------------------
-    # 2. Check _oauth2_proxy Cookie locally (Fastest for consecutive loads)
+    # 1. Check incoming REQUEST headers
     # ---------------------------------------------------------
-    oauth_cookie = request.cookies.get("_oauth2_proxy")
-    if oauth_cookie:
+    user_from_req = user_from_headers(headers=request.headers)
+    if user_from_req.is_authenticated:
+        candidate_user = user_from_req
 
-        try:
-            session_data = parse_oauth2_proxy_cookie(oauth_cookie, settings.oauth_cookie_secret)
-            if session_data:
-                username = session_data.get("u") or session_data.get("User") or "Guest"
-                email = session_data.get("e") or session_data.get("Email") or ""
-                token = session_data.get("at") or session_data.get("AccessToken") or ""
-                groups = tuple(session_data.get("g") or session_data.get("Groups") or ())
+    # ---------------------------------------------------------
+    # 2. Check _oauth2_proxy Cookie locally
+    # ---------------------------------------------------------
+    if not candidate_user.is_authenticated:
+        oauth_cookie = request.cookies.get("_oauth2_proxy")
+        if oauth_cookie:
+            try:
+                session_data = parse_oauth2_proxy_cookie(oauth_cookie, settings.oauth_cookie_secret)
+                if session_data:
+                    username = session_data.get("u") or session_data.get("User") or "Guest"
+                    email = session_data.get("e") or session_data.get("Email") or ""
+                    token = session_data.get("at") or session_data.get("AccessToken") or ""
+                    groups = tuple(session_data.get("g") or session_data.get("Groups") or ())
 
-                user = User(name=username, email=email, groups=groups, token=token)
-                if user.is_authenticated:
-                    if forward_headers:
-                        _save_headers_for_middleware(request, user)
-                    return user
-        except Exception as e:
-            logger.debug(f"Local cookie parse failed, falling back to httpx: {e}")
+                    parsed_user = User(name=username, email=email, groups=groups, token=token)
+                    if parsed_user.is_authenticated:
+                        candidate_user = parsed_user
+            except Exception as e:
+                logger.debug(f"Local cookie parse failed: {e}")
 
     # ---------------------------------------------------------
     # 3. Fallback: Query the remote Auth Service via httpx
     # ---------------------------------------------------------
-    async with httpx.AsyncClient(timeout=3.0) as client:
-        try:
-            headers = {
-                "X-Forwarded-Proto": request.headers.get("x-forwarded-proto", request.url.scheme),
-                "X-Forwarded-Host": request.headers.get("x-forwarded-host", request.headers.get("host", "")),
-                "X-Forwarded-Uri": request.url.path + (("?" + request.url.query) if request.url.query else ""),
-            }
-            if ua := request.headers.get("user-agent"):
-                headers["User-Agent"] = ua
+    if not candidate_user.is_authenticated:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            try:
+                headers = {
+                    "X-Forwarded-Proto": request.headers.get("x-forwarded-proto", request.url.scheme),
+                    "X-Forwarded-Host": request.headers.get("x-forwarded-host", request.headers.get("host", "")),
+                    "X-Forwarded-Uri": request.url.path + (("?" + request.url.query) if request.url.query else ""),
+                }
+                if ua := request.headers.get("user-agent"):
+                    headers["User-Agent"] = ua
 
-            auth_resp = await client.get(url, cookies=request.cookies, headers=headers)
+                auth_resp = await client.get(url, cookies=request.cookies, headers=headers)
+                if auth_resp.status_code in (200, 202):
+                    remote_user = user_from_headers(headers=auth_resp.headers)
+                    if remote_user.is_authenticated:
+                        candidate_user = remote_user
+            except Exception as e:
+                logger.error(f"Auth Service unreachable: {e}")
 
-            if auth_resp.status_code in (200, 202):
-                user = user_from_headers(headers=auth_resp.headers)
-                if forward_headers:
-                    _save_headers_for_middleware(request, user)
-                return user
+    # ---------------------------------------------------------
+    # 4. FINAL GATEWAY: Validate Token Validity
+    # ---------------------------------------------------------
+    if candidate_user.is_authenticated:
+        is_valid = await verify_github_token(candidate_user.token)
+        if not is_valid:
+            logger.warning(f"Intercepted invalid/scopeless token for {candidate_user.email}. Downgrading to Guest.")
+            # Token is dead, return an empty Guest user so they are forced to log in again
+            return User()
 
-        except Exception as e:
-            logger.error(f"Auth Service unreachable: {e}")
+            # Token is fully valid! Forward headers if requested.
+        if forward_headers:
+            _save_headers_for_middleware(request, candidate_user)
+
+        return candidate_user
 
     return User()
 

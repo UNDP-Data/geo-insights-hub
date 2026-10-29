@@ -99,7 +99,7 @@ def _account(request: Request, user: User | None) -> None:
                 .props(f'flat round dense color="{"blue" if is_authenticated else "secondary"}" size="lg"') \
                 .classes(' rounded-full hover:scale-110 transition') \
                 .style('border-radius: 50% !important; overflow: hidden;') \
-                .tooltip(f'Connected as {user.email}' if is_authenticated else f'Sign In {user.name} with email: {user.email}')
+                .tooltip(f'Connected as {user.email}. Click to sign out' if is_authenticated else f'Sign In {user.name} with email: {user.email}. ')
 
             async def go_auth():
                 verb = 'sign in' if action == 'start' else 'sign out'
@@ -225,32 +225,23 @@ async def standard_page(title: str = None, request: Request = None, response: Re
     # 1. Always try extracting/authenticating fresh from the current request first
     user = await authenticate( url=settings.private_auth_url,request=request, response=response,forward_headers=True)
 
-
-
-    # 2. If the current request gave us a valid authenticated user, update browser storage
+    # 2. Sync NiceGUI browser storage with reality
     if user.is_authenticated:
         app.storage.browser['user'] = dataclasses.asdict(user)
-
     else:
-        # 3. If current request is a Guest, check if we have a valid cached user in browser storage
-        cached_data = app.storage.browser.get('user')
-        if cached_data:
-            cached_user = User(**cached_data)
-            if cached_user.is_authenticated:
-                user = cached_user
+        # CRITICAL FIX: Destroy any stale cached user if auth failed or downgraded to Guest.
+        # This prevents resurrecting dead tokens.
+        app.storage.browser.pop('user', None)
 
-    # Create a stable identifier that ignores random guest emails
+    # 3. Detect transitions between 'guest' <-> authenticated user
     current_identity = user.email if user.is_authenticated else 'guest'
     cached_identity = app.storage.browser.get('sync_identity')
 
-    # Only sync if they actually transitioned between Guest <-> Authenticated User
     if current_identity != cached_identity:
-        # 1. Update the cache IMMEDIATELY to prevent infinite loops on reload
+        # Update cache immediately to prevent reload loops
         app.storage.browser['sync_identity'] = current_identity
 
-        # If they logged out, ensure the cached user data is wiped
-        if not user.is_authenticated:
-            app.storage.browser.pop('user', None)
+        # Trigger Git sync using the true validated identity
         await asyncio.to_thread(gitui.sync_repo_task, user)
 
 
