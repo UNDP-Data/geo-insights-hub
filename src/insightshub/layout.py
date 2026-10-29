@@ -4,7 +4,7 @@ from insightshub import gitui
 from nicegui import ui, app
 from pathlib import Path
 from fastapi import Request, Response
-from insightshub.auth import User, authenticate, page_url, user_from_headers
+from insightshub.auth import User, authenticate, page_url, authenticateh
 from insightshub.config import settings
 from contextlib import asynccontextmanager
 import logging
@@ -103,7 +103,7 @@ def _account(request: Request, user: User | None) -> None:
 
             async def go_auth():
                 verb = 'sign in' if action == 'start' else 'sign out'
-                logger.info(f'Going to {verb} {final_url}')
+                logger.debug(f'Going to {verb} {final_url}')
                 identity_btn.props('loading icon=sync')
                 identity_btn.classes(add='animate-spin')
                 await asyncio.sleep(.1)
@@ -223,7 +223,9 @@ async def standard_page(title: str = None, request: Request = None, response: Re
     """A reusable layout with a header, main content area, and footer."""
 
     # 1. Always try extracting/authenticating fresh from the current request first
-    user = await authenticate(url=settings.private_auth_url, request=request, forward_headers=True)
+    user = await authenticate( url=settings.private_auth_url,request=request, response=response,forward_headers=True)
+
+
 
     # 2. If the current request gave us a valid authenticated user, update browser storage
     if user.is_authenticated:

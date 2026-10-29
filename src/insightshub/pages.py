@@ -5,10 +5,9 @@ from fastapi import Request, Response
 import os
 from pathlib import Path
 from insightshub.layout import standard_page
-from insightshub.auth import sign_in_url, page_url
+from insightshub.auth import  page_url
 from insightshub import marutil as mu
 from insightshub.kubespawner import handle_session_launch
-from insightshub.gitui import open_create_notebook_dialog, confirm_delete_notebook, confirm_delete_folder
 from insightshub.kube_session_manager import manager
 import asyncio
 from fastapi.responses import RedirectResponse
@@ -29,62 +28,66 @@ logger = logging.getLogger(__name__)
 async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
     async with standard_page(title="Apps", request=request, response=response) as user:
+        logger.debug(f"User {user}")
 
-        logger.debug(f'User {user}')
 
         # 1. Traversal protection
         try:
             current_dir = (gitui.NOTEBOOKS_DIR / subpath).resolve()
             current_dir.relative_to(gitui.NOTEBOOKS_DIR.resolve())
         except (ValueError, RuntimeError):
-            ui.notify("Invalid path trajectory.", type='negative')
-            ui.navigate.to('/')
+            ui.notify("Invalid path trajectory.", type="negative")
+            ui.navigate.to("/")
             return
-
-        # 2. Permission flags
-        # Authenticated users have editing rights; guests have read-only rights
+        logger.debug(f"Current dir {current_dir}")
         can_edit = bool(user and user.is_authenticated)
 
-        # 3. Strict Zero-Trust Block: Directory is missing
-        if not current_dir.exists():
+        # 2. Helper for missing directory / unauthenticated empty state
+        def render_auth_prompt(msg: str):
             with ui.column().classes(
-                    'w-full max-w-xl mx-auto my-24 p-10 bg-white border-t-2 border-black shadow-sm gap-6 items-center text-center'
+                    "w-full max-w-xl mx-auto my-24 p-10 bg-white border-t-2 border-black shadow-sm gap-6 items-center text-center"
             ):
-                ui.icon('folder_off', color='negative').classes('text-5xl')
-                ui.html(
-                    f'The notebooks directory is currently empty on this server. '
-                    f'You must be authenticated to check out the <span class="text-red-600 font-bold">{settings.nb_github_repo}</span> workspace.'
-                ).classes('text-sm text-gray-600 leading-relaxed')
+                ui.icon("folder_off", color="negative").classes("text-5xl")
+                ui.html(msg).classes("text-sm text-gray-600 leading-relaxed")
 
-                # If they are NOT logged in, show the Sign In button
                 if not can_edit:
-                    sign_in_button = ui.button('Sign In', icon='login') \
-                        .props('color="negative" unelevated') \
-                        .classes('font-bold uppercase tracking-wide hover:scale-105 transition-transform px-6 py-2')
+                    btn = (
+                        ui.button("Sign In", icon="login")
+                        .props('color="negative" unelevated')
+                        .classes(
+                            "font-bold uppercase tracking-wide hover:scale-105 transition-transform px-6 py-2"
+                        )
+                    )
 
                     async def go_auth():
-                        # Clear stale cache before bounce
-                        app.storage.browser.pop('user', None)
-
-                        sign_in_button.props(add='loading')
+                        btn.props(add="loading")
                         await asyncio.sleep(0.1)
-                        safe_rd = quote(page_url(request), safe='')
-                        ui.navigate.to(f"/_auth/bounce?action=start&rd={safe_rd}")
+                        ui.navigate.to(
+                            f"/_auth/bounce?action=start&rd={quote(page_url(request), safe='')}"
+                        )
 
-                    sign_in_button.on('click', go_auth)
+                    btn.on("click", go_auth)
 
-                # If they ARE logged in, show the manual Sync button
-                else:
-                    pass
-                    # Trigger the sync explicitly using the authenticated user's token
-                    sync_success = await asyncio.to_thread(gitui.sync_repo_task, user=user)
+        # 3. Handle directory conditions
+        msg = f'The notebooks directory is currently empty on this server. You must be authenticated to check out the <span class="text-red-600 font-bold">{settings.nb_github_repo}</span> workspace.'
 
-                    if sync_success and current_dir.exists():
-                        ui.navigate.reload()
-
-
-            # CRITICAL: Return here so the page stops drawing and DOES NOT try to read the empty directory!
+        if not current_dir.exists():
+            # ui.notify(f"Current dir {current_dir}", type="negative")
+            render_auth_prompt(msg)
+            if can_edit:
+                if await asyncio.to_thread(gitui.sync_repo_task, user=user) and current_dir.exists():
+                    ui.navigate.reload()
             return
+
+
+
+        if not can_edit:
+            if gitui.repo_is_public(settings.nb_github_repo):
+                await asyncio.to_thread(gitui.sync_repo_task) # do not return,m co and contineu
+
+            else:
+                render_auth_prompt(msg)
+                return
 
 
 
@@ -129,7 +132,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                     'New',
                                     icon='add',
                                     color='negative',
-                                    on_click=lambda e: open_create_notebook_dialog(
+                                    on_click=lambda e: gitui.open_create_notebook_dialog(
                                         current_subpath=subpath,
                                         user=user,
                                     )
@@ -187,7 +190,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                         ui.button(
                                             icon='close',
                                             color="negative",
-                                            on_click=lambda e, p=rel_path, n=item.name: confirm_delete_folder(
+                                            on_click=lambda e, p=rel_path, n=item.name: gitui.confirm_delete_folder(
                                                 folder_path=p, folder_name=n, user=user
                                             )
                                         ).props('flat round dense size=sm') \
@@ -220,7 +223,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                         descr = mu.get_global_metadata(str(item.absolute()))
 
                         with ui.column().classes(
-                                'w-full border-t-2 border-black border-b-1 pt-4 pb-6 flex flex-col justify-between h-full bg-transparent group'
+                                'w-full border-t-2 border-b-1 border-red-500 pt-4 pb-6 flex flex-col justify-between h-full bg-transparent group'
                         ):
                             with ui.column().classes('w-full gap-4'):
                                 # 1. Content Tag
@@ -271,7 +274,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                         'Delete',
                                         icon="delete",
                                         color="negative",
-                                        on_click=lambda e, p=str(rel_path), n=item_label: confirm_delete_notebook(
+                                        on_click=lambda e, p=str(rel_path), n=item_label: gitui.confirm_delete_notebook(
                                             notebook_path=p, notebook_name=n, user=user
                                         )) \
                                         .props('unelevated') \
@@ -295,8 +298,8 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                         )
                                         # ).classes('undp-btn--small primary text-white flex-1 w-1/2 capitalize') \
                                     ).classes(
-                                        'text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider hover:scale-110 transition') \
-                                        .tooltip(f'View as interactive app')
+                                    'text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider hover:scale-110 transition') \
+                                    .tooltip(f'View as interactive app')
                                     # .tooltip(f'View as interactive app at {next_uri}')
 
 
@@ -446,11 +449,11 @@ def auth_bounce(action: str, rd: str):
     """Silently clears the cookie and redirects in a single network hop."""
     # 1. Clear the local identity safely via HTTP
     app.storage.browser.pop('user', None)
+    app.storage.browser.pop('sync_ident', None)
 
     # 2. Construct the auth proxy URL
     target_host = settings.public_auth_url
     final_url = f"{target_host}/{action}?rd={quote(rd, safe=':/%?=&')}"
-
     # 3. Instantly redirect the browser (No UI is rendered)
     return RedirectResponse(final_url)
 
@@ -460,4 +463,3 @@ async def datasets(request:Request, response:Response)->None:
 
     async with standard_page(title="Datasets", request=request, response=response) as user:
         ui.label(f'Most useful datasets for {user.email}')
-        ui.label(manager.get_user_sessions(user_email=user.email))

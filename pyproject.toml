@@ -12,6 +12,7 @@ dependencies = [
     "gitpython>=3.2.0",
     "marimo>=0.25.1",
     "kubernetes>=37.0.0",
+    "cryptography>=50.0.2",
 ]
 
 [build-system]

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     private_auth_url: str
     nb_github_token: Optional[SecretStr] = None
     nb_github_repo: str
+    oauth_cookie_secret:str
 
     model_config = SettingsConfigDict(
         env_file=".env",
