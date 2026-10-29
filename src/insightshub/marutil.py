@@ -1,14 +1,14 @@
-import ast
 import os
+import ast
 import importlib.util
 import logging
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
 
 def get_global_metadata(target):
     """
     Returns the global docstring if it exists, otherwise extracts the first
-    marimo markdown block (mo.md) from the notebook.
+    standalone string or marimo markdown block (mo.md) from the notebook.
     """
     path = target
 
@@ -25,12 +25,23 @@ def get_global_metadata(target):
 
         tree = ast.parse(source_code)
 
-        # 1. Try standard Python docstring
+        # 1. Try standard Python docstring at the very top of the file
         global_doc = ast.get_docstring(tree)
         if global_doc:
             return global_doc
 
-        # 2. Extract first mo.md() block
+        # 2. Extract the first standalone string literal inside ANY cell function
+        # This catches strings placed after imports (e.g., after `import marimo as mo`)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                for stmt in node.body:
+                    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+                        if isinstance(stmt.value.value, str):
+                            val = stmt.value.value.strip()
+                            if val:
+                                return val
+
+        # 3. Fallback: Extract first mo.md() block
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'md':
                 if node.args and hasattr(node.args[0], 'value'):
@@ -53,9 +64,8 @@ def get_global_metadata(target):
                             first_header = lines[0].lstrip('#').strip()
                             return first_header
 
-
+        return None
 
     except Exception as e:
         logger.error(f'Failed to extract metadata from notebook {target}. {e}')
-        pass
-
+        return None

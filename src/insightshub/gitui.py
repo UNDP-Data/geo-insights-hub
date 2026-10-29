@@ -75,7 +75,7 @@ def sync_repo(user: User = None) -> bool:
 
     with _repo_lock:
         if not NOTEBOOKS_DIR.exists():
-            logger.info("Notebooks directory missing; performing initial clone...")
+            logger.info(f"Notebooks directory missing; performing initial clone from {repo_url}...")
             repo = git.Repo.clone_from(repo_url, NOTEBOOKS_DIR, env=git_env)
             repo.remote("origin").set_url(repo_url)
         else:
