@@ -14,6 +14,7 @@ import ast
 import importlib
 import sys
 import httpx
+import os
 
 
 
@@ -89,6 +90,14 @@ def spawn_marimo_session(
     parent_url: str = None,
     missing_packages: list[str] = None,
 ):
+    # Check if the container was built with --build-arg dev=true
+    is_dev = os.getenv("DEV_MODE", "false").lower() == "true"
+    worker_image = (
+        "insights-hub:latest"
+        if is_dev
+        else "undpgeohub.azurecr.io/insights-hub:latest"
+    )
+    pull_policy = "IfNotPresent" if is_dev else "Always"
     repo_url = f"https://oauth2:{user.token}@github.com/{settings.nb_github_repo}"
     internal_hub_url = "http://insights-hub-svc.hub.svc.cluster.local"
 
@@ -110,107 +119,102 @@ def spawn_marimo_session(
     sanitized_email = user.email.replace("@", "-").replace(".", "-")
 
     yaml_template = textwrap.dedent(f"""\
-    apiVersion: batch/v1
-    kind: Job
-    metadata:
-      name: placeholder-name
-      annotations:
-        marimo.io/notebook-path: "{notebook_path}"
-        marimo.io/hostname: "{session_hostname}"
-    spec:
-      activeDeadlineSeconds: 86400
-      ttlSecondsAfterFinished: 3600
-      template:
+        apiVersion: batch/v1
+        kind: Job
         metadata:
+          name: placeholder-name
+          annotations:
+            marimo.io/notebook-path: "{notebook_path}"
+            marimo.io/hostname: "{session_hostname}"
+        spec:
+          activeDeadlineSeconds: 86400
+          ttlSecondsAfterFinished: 3600
+          template:
+            metadata:
+              labels:
+                app: marimo-worker
+                session: placeholder-session
+                owner: "{sanitized_email}"
+            spec:
+              restartPolicy: Never
+              volumes:
+              - name: session-workspace
+                emptyDir: {{}}
+              initContainers:
+              - name: fetch-notebooks
+                image: alpine/git:latest
+                command: ["/bin/sh", "-c"]
+                args:
+                - |
+                  rm -rf /workspace/* && \
+                  git clone --no-checkout --depth 1 {repo_url} /workspace && \
+                  cd /workspace && \
+                  git sparse-checkout set "{notebook_path}" && \
+                  git checkout
+                volumeMounts:
+                - name: session-workspace
+                  mountPath: /workspace
+              containers:
+              - name: marimo
+                image: {worker_image}
+                imagePullPolicy: {pull_policy}
+                ports:
+                - containerPort: 8080
+                resources:
+                  requests:
+                    memory: "2Gi"
+                    cpu: "1800m"
+                  limits:
+                    memory: "6G"
+                    cpu: "3800m"
+                volumeMounts:
+                - name: session-workspace
+                  mountPath: /workspace
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: placeholder-name
           labels:
-            app: marimo-worker
-            session: placeholder-session
             owner: "{sanitized_email}"
         spec:
-          restartPolicy: Never
-          volumes:
-          - name: session-workspace
-            emptyDir: {{}}
-          # Grab the live code from the Kind worker node
-          - name: live-code-mount
-            hostPath:
-              path: /app/src
-              type: Directory
-          initContainers:
-          - name: fetch-notebooks
-            image: alpine/git:latest
-            command: ["/bin/sh", "-c"]
-            args:
-            - |
-              rm -rf /workspace/* && \
-              git clone --no-checkout --depth 1 {repo_url} /workspace && \
-              cd /workspace && \
-              git sparse-checkout set "{notebook_path}" && \
-              git checkout
-            volumeMounts:
-            - name: session-workspace
-              mountPath: /workspace
-          containers:
-          - name: marimo
-            image: insights-hub:latest
-            imagePullPolicy: IfNotPresent
-            ports:
-            - containerPort: 8080
-            resources:
-              requests:
-                memory: "2Gi"
-                cpu: "2000m"
-              limits:
-                memory: "8Gi"
-                cpu: "4000m"
-            volumeMounts:
-            - name: session-workspace
-              mountPath: /workspace
-            # 2. Inject the live code into the Marimo pod
-            - name: live-code-mount
-              mountPath: /app/src  # Adjust this if your Python path expects it elsewhere
-    ---
-    apiVersion: v1
-    kind: Service
-    metadata:
-      name: placeholder-name
-      labels:
-        owner: "{sanitized_email}"
-    spec:
-      selector:
-        session: placeholder-session
-      ports:
-      - port: 80
-        targetPort: 8080
-    ---
-    apiVersion: gateway.networking.k8s.io/v1
-    kind: HTTPRoute
-    metadata:
-      name: placeholder-name
-      labels:
-        owner: "{sanitized_email}"
-    spec:
-      parentRefs:
-      - name: cluster-gateway
-        namespace: default
-      hostnames:
-      - placeholder-hostname
-      rules:
-      - matches:
-        - path:
-            type: PathPrefix
-            value: /
-        backendRefs:
-        - name: placeholder-name
-          port: 80
-    """)
+          selector:
+            session: placeholder-session
+          ports:
+          - port: 80
+            targetPort: 8080
+        ---
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: HTTPRoute
+        metadata:
+          name: placeholder-name
+          labels:
+            owner: "{sanitized_email}"
+        spec:
+          parentRefs:
+          - name: cluster-gateway
+            namespace: default
+          hostnames:
+          - placeholder-hostname
+          rules:
+          - matches:
+            - path:
+                type: PathPrefix
+                value: /
+            backendRefs:
+            - name: placeholder-name
+              port: 80
+        """)
 
     job_dict, svc_dict, route_dict = list(yaml.safe_load_all(yaml_template))
 
     # 1. Configure Job
     job_dict["metadata"]["name"] = resource_name
     job_dict["spec"]["template"]["metadata"]["labels"]["session"] = session_id
-
+    if not is_dev:
+        job_dict["spec"]["template"]["spec"]["nodeSelector"] = {
+            "type": "insights"
+        }
 
     if mode == "edit":
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [

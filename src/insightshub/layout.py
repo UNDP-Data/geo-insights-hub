@@ -99,7 +99,7 @@ def _account(request: Request, user: User | None) -> None:
                 .props(f'flat round dense color="{"blue" if is_authenticated else "secondary"}" size="lg"') \
                 .classes(' rounded-full hover:scale-110 transition') \
                 .style('border-radius: 50% !important; overflow: hidden;') \
-                .tooltip(f'Connected as {user.email}. Click to sign out' if is_authenticated else f'Sign In {user.name} with email: {user.email}. ')
+                .tooltip(f'Connected as {user.email}. Click to sign out' if is_authenticated else f'Sign In {user.name}. ')
 
             async def go_auth():
                 verb = 'sign in' if action == 'start' else 'sign out'
@@ -224,26 +224,11 @@ async def standard_page(title: str = None, request: Request = None, response: Re
 
     # 1. Always try extracting/authenticating fresh from the current request first
     user = await authenticate( url=settings.private_auth_url,request=request, response=response,forward_headers=True)
+    logger.debug(f'User: {user.email} in {title}')
 
-    # 2. Sync NiceGUI browser storage with reality
-    if user.is_authenticated:
-        app.storage.browser['user'] = dataclasses.asdict(user)
-    else:
-        # CRITICAL FIX: Destroy any stale cached user if auth failed or downgraded to Guest.
-        # This prevents resurrecting dead tokens.
-        app.storage.browser.pop('user', None)
 
-    # 3. Detect transitions between 'guest' <-> authenticated user
-    current_identity = user.email if user.is_authenticated else 'guest'
-    cached_identity = app.storage.browser.get('sync_identity')
-
-    if current_identity != cached_identity:
-        # Update cache immediately to prevent reload loops
-        app.storage.browser['sync_identity'] = current_identity
-
-        # Trigger Git sync using the true validated identity
-        await asyncio.to_thread(gitui.sync_repo_task, user)
-
+    # Trigger Git sync using the user
+    await asyncio.to_thread(gitui.sync_repo_task, user)
 
     load_theme()
     _header(request=request, user=user)

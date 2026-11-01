@@ -10,10 +10,11 @@ import base64
 import hashlib
 from starlette.middleware.base import BaseHTTPMiddleware
 import time
+import json
+from dataclasses import asdict
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
 try:
-    # cryptography >= 43.0.0
     from cryptography.hazmat.decrepit.ciphers.modes import CFB
 except ImportError:
     # Fallback for older cryptography versions
@@ -27,27 +28,25 @@ _VALIDATED_TOKENS = {}
 @dataclass(frozen=True)
 class User:
     """Represents an application user."""
-    name: str = 'Guest'
+    name: str = ''
     email: str = ''
-    token:str = ''
+    token: str = ''
     groups: tuple[str, ...] = ()
-
 
     def __post_init__(self):
         if not self.email:
-            # Use object.__setattr__ to bypass frozen=True restrictions during initialization
-            random_suffix = random.randint(0, 10000)
-            object.__setattr__(self, 'email', f"{self.name.lower()}{random_suffix}@ran.dom")
+            if not self.name:
+                random_suffix = random.randint(1000, 9999)
+                object.__setattr__(self, 'name', f"Guest{random_suffix}")
+            object.__setattr__(self, 'email', f"{self.name.lower()}@ran.dom")
 
     @property
     def display_name(self) -> str:
-        """Returns the user's name if available, otherwise defaults to email."""
         return self.name or self.email
 
     @property
-    def is_authenticated(self) -> bool:
-        """Checks if the user is authenticated (not a default Guest)."""
-        return bool(self.name != 'Guest' and self.email and self.token)
+    def is_authenticated(self) -> str | bool:
+        return bool(not self.name.startswith('Guest') and self.email and self.token)
 
 
 
@@ -413,96 +412,179 @@ def _save_headers_for_middleware(request: Request, user: User) -> None:
         "x-auth-request-access-token": user.token,
     }
 
+def serialize_user_cookie(user: User) -> str:
+  """Serializes a full User object into a base64-encoded JSON string for a cookie."""
+  data = asdict(user)
+  data["groups"] = list(user.groups)  # Convert tuple to list for JSON
+  json_bytes = json.dumps(data).encode("utf-8")
+  return base64.urlsafe_b64encode(json_bytes).decode("ascii")
+
+
+def deserialize_user_cookie(cookie_val: str) -> User | None:
+  """Deserializes a base64-encoded JSON cookie string back into a full User object."""
+  try:
+    json_bytes = base64.urlsafe_b64decode(cookie_val.encode("ascii"))
+    data = json.loads(json_bytes.decode("utf-8"))
+    return User(
+        name=data.get("name", ""),
+        email=data.get("email", ""),
+        token=data.get("token", ""),
+        groups=tuple(data.get("groups", ())),
+    )
+  except Exception as e:
+    logger.debug(f"Failed to deserialize hub_guest_user cookie: {e}")
+    return None
+
+
+def create_user(request: Request | None = None) -> User:
+  """Retrieves the full Guest User from the 'user' cookie, or creates and stores a new one."""
+  if request is not None:
+    cookie_val = request.cookies.get("user")
+    if cookie_val:
+      existing_user = deserialize_user_cookie(cookie_val)
+      if existing_user:
+        return existing_user
+
+    # No valid cookie yet: generate a full User and store it on request.state for the middleware
+    new_guest = User()
+    request.state.new_guest_user = new_guest
+    return new_guest
+
+  return User()
+
 
 async def authenticate(
-        url: str,
-        request: Request,
-        response: Response | None = None,
-        forward_headers: bool = False,
+    url: str,
+    request: Request,
+    response: Response | None = None,
+    forward_headers: bool = False,
 ) -> User:
-    """
-    Authenticates the user using a 3-tier strategy and verifies the GitHub token.
-    """
-    candidate_user = User()
+  """Authenticates the user using a 3-tier strategy and verifies the GitHub token."""
+  guest_user = create_user(request=request)
+  candidate_user = guest_user
 
-    # ---------------------------------------------------------
-    # 1. Check incoming REQUEST headers
-    # ---------------------------------------------------------
-    user_from_req = user_from_headers(headers=request.headers)
-    if user_from_req.is_authenticated:
-        candidate_user = user_from_req
+  # ---------------------------------------------------------
+  # 1. Check incoming REQUEST headers
+  # ---------------------------------------------------------
+  user_from_req = user_from_headers(headers=request.headers)
+  if user_from_req.is_authenticated:
+    candidate_user = user_from_req
 
-    # ---------------------------------------------------------
-    # 2. Check _oauth2_proxy Cookie locally
-    # ---------------------------------------------------------
-    if not candidate_user.is_authenticated:
-        oauth_cookie = request.cookies.get("_oauth2_proxy")
-        if oauth_cookie:
-            try:
-                session_data = parse_oauth2_proxy_cookie(oauth_cookie, settings.oauth_cookie_secret)
-                if session_data:
-                    username = session_data.get("u") or session_data.get("User") or "Guest"
-                    email = session_data.get("e") or session_data.get("Email") or ""
-                    token = session_data.get("at") or session_data.get("AccessToken") or ""
-                    groups = tuple(session_data.get("g") or session_data.get("Groups") or ())
+  # ---------------------------------------------------------
+  # 2. Check _oauth2_proxy Cookie locally
+  # ---------------------------------------------------------
+  if not candidate_user.is_authenticated:
+    oauth_cookie = request.cookies.get("_oauth2_proxy")
+    if oauth_cookie:
+      try:
+        session_data = parse_oauth2_proxy_cookie(
+            oauth_cookie, settings.oauth_cookie_secret
+        )
+        if session_data:
+          username = session_data.get("u") or session_data.get("User")
+          email = session_data.get("e") or session_data.get("Email")
+          token = session_data.get("at") or session_data.get("AccessToken")
+          groups = tuple(
+              session_data.get("g") or session_data.get("Groups") or ()
+          )
 
-                    parsed_user = User(name=username, email=email, groups=groups, token=token)
-                    if parsed_user.is_authenticated:
-                        candidate_user = parsed_user
-            except Exception as e:
-                logger.debug(f"Local cookie parse failed: {e}")
+          parsed_user = User(
+              name=username, email=email, groups=groups, token=token
+          )
+          if parsed_user.is_authenticated:
+            candidate_user = parsed_user
+      except Exception as e:
+        logger.debug(f"Local cookie parse failed: {e}")
 
-    # ---------------------------------------------------------
-    # 3. Fallback: Query the remote Auth Service via httpx
-    # ---------------------------------------------------------
-    if not candidate_user.is_authenticated:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            try:
-                headers = {
-                    "X-Forwarded-Proto": request.headers.get("x-forwarded-proto", request.url.scheme),
-                    "X-Forwarded-Host": request.headers.get("x-forwarded-host", request.headers.get("host", "")),
-                    "X-Forwarded-Uri": request.url.path + (("?" + request.url.query) if request.url.query else ""),
-                }
-                if ua := request.headers.get("user-agent"):
-                    headers["User-Agent"] = ua
+  # ---------------------------------------------------------
+  # 3. Fallback: Query the remote Auth Service via httpx
+  # ---------------------------------------------------------
+  if not candidate_user.is_authenticated:
+    async with httpx.AsyncClient(timeout=3.0) as client:
+      try:
+        headers = {
+            "X-Forwarded-Proto": request.headers.get(
+                "x-forwarded-proto", request.url.scheme
+            ),
+            "X-Forwarded-Host": request.headers.get(
+                "x-forwarded-host", request.headers.get("host", "")
+            ),
+            "X-Forwarded-Uri": request.url.path + (
+                ("?" + request.url.query) if request.url.query else ""
+            ),
+        }
+        if ua := request.headers.get("user-agent"):
+          headers["User-Agent"] = ua
 
-                auth_resp = await client.get(url, cookies=request.cookies, headers=headers)
-                if auth_resp.status_code in (200, 202):
-                    remote_user = user_from_headers(headers=auth_resp.headers)
-                    if remote_user.is_authenticated:
-                        candidate_user = remote_user
-            except Exception as e:
-                logger.error(f"Auth Service unreachable: {e}")
+        auth_resp = await client.get(
+            url, cookies=request.cookies, headers=headers
+        )
+        if auth_resp.status_code in (200, 202):
+          remote_user = user_from_headers(headers=auth_resp.headers)
+          if remote_user.is_authenticated:
+            candidate_user = remote_user
+      except Exception as e:
+        logger.error(f"Auth Service unreachable: {e}")
 
-    # ---------------------------------------------------------
-    # 4. FINAL GATEWAY: Validate Token Validity
-    # ---------------------------------------------------------
-    if candidate_user.is_authenticated:
-        is_valid = await verify_github_token(candidate_user.token)
-        if not is_valid:
-            logger.warning(f"Intercepted invalid/scopeless token for {candidate_user.email}. Downgrading to Guest.")
-            # Token is dead, return an empty Guest user so they are forced to log in again
-            return User()
+  # ---------------------------------------------------------
+  # 4. FINAL GATEWAY: Validate Token Validity
+  # ---------------------------------------------------------
+  if candidate_user.is_authenticated:
+    is_valid = await verify_github_token(candidate_user.token)
+    if not is_valid:
+      logger.warning(
+          f"Intercepted invalid/scopeless token for {candidate_user.email}."
+          " Downgrading to Guest."
+      )
+      request.state.clear_oauth_cookie = True
+      return guest_user
 
-            # Token is fully valid! Forward headers if requested.
-        if forward_headers:
-            _save_headers_for_middleware(request, candidate_user)
+    # Token is valid: don't set a guest cookie for an authenticated user
+    request.state.new_guest_user = None
+    if forward_headers:
+      _save_headers_for_middleware(request, candidate_user)
 
-        return candidate_user
+    return candidate_user
 
-    return User()
-
-
+  return guest_user
 
 
 class CustomHeaderMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
 
-        # 2. Check if authenticate() saved any auth_headers onto request.state
-        auth_headers = getattr(request.state, "auth_headers", None)
-        if auth_headers:
-            for k, v in auth_headers.items():
-                response.headers[k] = v
+  async def dispatch(self, request: Request, call_next):
+    response = await call_next(request)
 
-        return response
+    # 1. Persist the full serialized Guest User object in the cookie
+    new_guest_user: User | None = getattr(request.state, "new_guest_user", None)
+    if new_guest_user:
+      response.set_cookie(
+          key="user",
+          value=serialize_user_cookie(new_guest_user),
+          path="/",
+          max_age=86400,
+          httponly=True,
+          samesite="lax",
+      )
+
+    # 2. If authenticate() detected a dead/invalid token, wipe _oauth2_proxy cookies
+    if getattr(request.state, "clear_oauth_cookie", False):
+      host = request.url.hostname or ""
+      parent_domain = (
+          "." + ".".join(host.split(".")[-2:]) if "." in host else None
+      )
+
+      for cookie_name in request.cookies:
+        if cookie_name.startswith("_oauth2_proxy"):
+          response.delete_cookie(key=cookie_name, path="/")
+          if parent_domain:
+            response.delete_cookie(
+                key=cookie_name, path="/", domain=parent_domain
+            )
+
+    # 3. Check if authenticate() saved any auth_headers onto request.state
+    auth_headers = getattr(request.state, "auth_headers", None)
+    if auth_headers:
+      for k, v in auth_headers.items():
+        response.headers[k] = v
+
+    return response

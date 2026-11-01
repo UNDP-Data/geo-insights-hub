@@ -1,9 +1,9 @@
 
 """Site pages. Importing this module registers the routes with NiceGUI."""
-
 from fastapi import Request, Response
 import os
 from pathlib import Path
+
 from insightshub.layout import standard_page
 from insightshub.auth import  page_url
 from insightshub import marutil as mu
@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
     async with standard_page(title="Apps", request=request, response=response) as user:
-        logger.debug(f"User {user}")
 
 
         # 1. Traversal protection
@@ -445,17 +444,15 @@ async def session_manager(request: Request, response: Response) -> None:
 
 
 @ui.page('/_auth/bounce')
-def auth_bounce(action: str, rd: str):
+async def auth_bounce(action: str, rd: str, request: Request, response:Response, ):
     """Silently clears the cookie and redirects in a single network hop."""
-    # 1. Clear the local identity safely via HTTP
-    app.storage.browser.pop('user', None)
-    app.storage.browser.pop('sync_ident', None)
 
-    # 2. Construct the auth proxy URL
-    target_host = settings.public_auth_url
-    final_url = f"{target_host}/{action}?rd={quote(rd, safe=':/%?=&')}"
-    # 3. Instantly redirect the browser (No UI is rendered)
-    return RedirectResponse(final_url)
+    async with standard_page(title="bounce", request=request, response=response) as user:
+        # 2. Construct the auth proxy URL
+        target_host = settings.public_auth_url
+        final_url = f"{target_host}/{action}?rd={quote(rd, safe=':/%?=&')}"
+        # 3. Instantly redirect the browser (No UI is rendered)
+        return RedirectResponse(final_url)
 
 @ui.page('/datasets')
 

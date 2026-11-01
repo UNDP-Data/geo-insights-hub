@@ -5,10 +5,10 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI #, Request, BackgroundTasks
 from nicegui import app as nicegui_app
-from nicegui import ui
+from nicegui import ui, Client
 from insightshub.config import settings
 from insightshub import pages
-from insightshub.auth import CustomHeaderMiddleware
+from insightshub.auth import CustomHeaderMiddleware, User
 from kubernetes import client
 
 logging.basicConfig(level=logging.INFO)
@@ -45,6 +45,22 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.add_middleware(CustomHeaderMiddleware)
 
+@nicegui_app.on_delete
+async def cleanup_orphaned_guest_sessions(client: Client):
+  """Fires automatically when a tab closes or refreshes."""
+  guest_email = getattr(client, "guest_email", None)
+  if not guest_email:
+    return  # Authenticated user OR Guest with 0 sessions -> do nothing!
+
+  user_sessions = manager.get_user_sessions(guest_email)
+  if user_sessions:
+    logger.info(
+        f"Guest {guest_email} left with {len(user_sessions)} active session(s)."
+        " Terminating now..."
+    )
+    for s in user_sessions:
+      await manager.delete_session(s.session_id)
+
 
 # @app.post("/git/sync")
 # async def github_push_webhook(request: Request, background_tasks: BackgroundTasks):
@@ -54,6 +70,32 @@ app.add_middleware(CustomHeaderMiddleware)
 #     return {"message": "Sync triggered"}
 
 
+def sync_guest_exit_guard(user: User):
+  """Call this in standard_page (and after spawning/killing a session).
+
+  Turns the browser exit warning ON if the Guest has active sessions, or OFF if
+  they have 0.
+  """
+  if user.is_authenticated:
+    return
+
+  client = ui.context.client
+  user_sessions = manager.get_user_sessions(user.email)
+
+  if user_sessions:
+    # Tag the client so @app.on_delete knows this Guest has live K8s pods
+    client.guest_email = user.email
+    ui.run_javascript("""
+            window.onbeforeunload = function (e) {
+                e.preventDefault();
+                e.returnValue = 'You have an active Guest session. Leaving or refreshing will terminate it.';
+                return e.returnValue;
+            };
+        """)
+  else:
+    # No active sessions: clear the tag and disable the browser prompt!
+    client.guest_email = None
+    ui.run_javascript("window.onbeforeunload = null;")
 
 
 @app.delete("/api/sessions/{session_id}")
