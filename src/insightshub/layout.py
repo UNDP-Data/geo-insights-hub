@@ -1,10 +1,9 @@
 import asyncio
-import dataclasses
 from insightshub import gitui
 from nicegui import ui, app
 from pathlib import Path
 from fastapi import Request, Response
-from insightshub.auth import User, authenticate, page_url, authenticateh
+from insightshub.auth import User, authenticate, page_url
 from insightshub.config import settings
 from contextlib import asynccontextmanager
 import logging
@@ -211,6 +210,7 @@ def _footer() -> None:
                 with ui.element("nav").classes("undp-footer__links"):
                     for label, url in FOOTER_LINKS:
                         _link(label, url).classes("undp-footer__link")
+
 
 
 def page_title(title: str) -> None:
