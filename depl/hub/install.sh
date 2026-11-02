@@ -11,7 +11,7 @@ CLUSTER_NAME="insights"
 
 echo "1. Building Docker image from repo root..."
 # Passes the REPO_ROOT as the build context so it finds Dockerfile and src/
-docker build -t $IMAGE_NAME "$REPO_ROOT"
+docker build --build-arg dev=true -t $IMAGE_NAME "$REPO_ROOT"
 
 echo "2. Loading image into KinD cluster..."
 kind load docker-image $IMAGE_NAME --name $CLUSTER_NAME

@@ -5,10 +5,10 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI #, Request, BackgroundTasks
 from nicegui import app as nicegui_app
-from nicegui import ui
+from nicegui import ui, Client
 from insightshub.config import settings
 from insightshub import pages
-from insightshub.auth import CustomHeaderMiddleware
+from insightshub.auth import CustomHeaderMiddleware, User
 from kubernetes import client
 
 logging.basicConfig(level=logging.INFO)
@@ -46,12 +46,14 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.add_middleware(CustomHeaderMiddleware)
 
 
+
 # @app.post("/git/sync")
 # async def github_push_webhook(request: Request, background_tasks: BackgroundTasks):
 #     # Run the git pull and cache rebuild in the background
 #     # so GitHub gets an immediate 200 OK response
 #     background_tasks.add_task(sync_repo_task)
 #     return {"message": "Sync triggered"}
+
 
 
 

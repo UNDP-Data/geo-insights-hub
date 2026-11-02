@@ -1,0 +1,131 @@
+name: Build, publish and deploy
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    # Prevents race conditions on same-day tag increments
+    concurrency:
+      group: build-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate CalVer Tag (vYYYYMMDD.N)
+        if: github.ref == 'refs/heads/main'
+        id: calver
+        run: |
+          DATE=$(date -u +'%Y%m%d')
+          COUNT=$(git tag -l "v${DATE}.*" | wc -l | tr -d ' ')
+          NEXT=$((COUNT + 1))
+          TAG="v${DATE}.${NEXT}"
+          IMAGE_LOWER=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "full_image=${IMAGE_LOWER}:${TAG}" >> $GITHUB_OUTPUT
+      
+
+      - name: Log in to the Container registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.calver.outputs.tag }},enable={{is_default_branch}}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions Cache configuration
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create release
+        if: github.ref == 'refs/heads/main'
+        id: create_release
+        uses: ncipollo/release-action@v1.18.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ steps.calver.outputs.tag }}
+          name: Release ${{ steps.calver.outputs.tag }}
+          generateReleaseNotes: true
+          draft: false
+          skipIfReleaseExists: true
+
+#      - name: Deploy to AKS
+#        if: github.ref == 'refs/heads/main'
+#        env:
+#          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+#          IMAGE: ${{ steps.calver.outputs.full_image }}
+#          NAMESPACE: ${{ vars.NAMESPACE || 'hub' }}
+#          HOSTNAME: ${{ vars.HOSTNAME || 'insights.undpgeohub.org' }}
+#          HUB_ENV_CONTENT: ${{ secrets.HUB_ENV }}
+#        run: |
+#          # 1. Load kubeconfig from KUBE_CONFIG env var (handles both base64 and raw YAML)
+#          mkdir -p ~/.kube
+#          if printf "%s" "$KUBE_CONFIG" | base64 -d >/dev/null 2>&1; then
+#            printf "%s" "$KUBE_CONFIG" | base64 -d > ~/.kube/config
+#          else
+#            printf "%s\n" "$KUBE_CONFIG" > ~/.kube/config
+#          fi
+#          chmod 600 ~/.kube/config
+#
+#          # 2. Ensure namespace exists first, then create/update 'hub-env' Secret
+#          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+#          kubectl create secret generic hub-env \
+#            --from-env-file=<(printf "%s\n" "$HUB_ENV_CONTENT") \
+#            --from-literal=SPAWNER_IMAGE="$IMAGE" \
+#            -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+#
+#          # 3. Pipe hydrated manifest directly into kubectl (no temp files needed)
+#          envsubst < depl/hub/insights-hub-prod.yaml | kubectl apply -f -
+#
+#          # 4. Wait for rollout; grab logs and roll back automatically if it fails
+#          if ! kubectl rollout status deployment/insights-hub -n "$NAMESPACE" --timeout=90s; then
+#            echo "❌ Rollout failed! Fetching broken pod logs:"
+#            kubectl logs -l app=insights-hub -n "$NAMESPACE" --tail=50 --all-containers=true || true
+#            kubectl describe pods -l app=insights-hub -n "$NAMESPACE" | tail -n 30 || true
+#
+#            echo "⏪ Rolling back to previous stable release..."
+#            kubectl rollout undo deployment/insights-hub -n "$NAMESPACE"
+#            kubectl rollout status deployment/insights-hub -n "$NAMESPACE" --timeout=60s
+#
+#            echo "⚠️ Service restored to previous version, but failing CI job so you get notified."
+#            exit 1
+#          fi
+
+
