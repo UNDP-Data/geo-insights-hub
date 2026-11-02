@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${NAMESPACE}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hub-env
+  namespace: ${NAMESPACE}
+type: Opaque
+stringData:
+  # Put your .env keys here and pass them in the 'Inject Environment Variables' step
+  # EXAMPLE_KEY: "${EXAMPLE_KEY}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: insights-hub
+  namespace: ${NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: insights-hub
+  template:
+    metadata:
+      labels:
+        app: insights-hub
+    spec:
+      containers:
+      - name: web
+        image: ${IMAGE}
+        imagePullPolicy: IfNotPresent
+        envFrom:
+          - secretRef:
+              name: hub-env
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: insights-hub-svc
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    app: insights-hub
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: insights-hub-route
+  namespace: ${NAMESPACE}
+spec:
+  parentRefs:
+  - name: cluster-gateway
+    namespace: default
+  hostnames:
+  - "${HOSTNAME}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: insights-hub-svc
+      port: 80
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hub-secret-reader
+  namespace: ${NAMESPACE}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["hub-env"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hub-secret-reader-binding
+  namespace: ${NAMESPACE}
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: ${NAMESPACE}
+roleRef:
+  kind: Role
+  name: hub-secret-reader
+  apiGroup: rbac.authorization.k8s.io

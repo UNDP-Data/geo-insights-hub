@@ -439,7 +439,7 @@ def deserialize_user_cookie(cookie_val: str) -> User | None:
 def create_user(request: Request | None = None) -> User:
   """Retrieves the full Guest User from the 'user' cookie, or creates and stores a new one."""
   if request is not None:
-    cookie_val = request.cookies.get("user")
+    cookie_val = request.cookies.get("guest_user")
     if cookie_val:
       existing_user = deserialize_user_cookie(cookie_val)
       if existing_user:
@@ -558,7 +558,7 @@ class CustomHeaderMiddleware(BaseHTTPMiddleware):
     new_guest_user: User | None = getattr(request.state, "new_guest_user", None)
     if new_guest_user:
       response.set_cookie(
-          key="user",
+          key="guest_user",
           value=serialize_user_cookie(new_guest_user),
           path="/",
           max_age=86400,

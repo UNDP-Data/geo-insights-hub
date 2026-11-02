@@ -18,7 +18,8 @@ RUN uv venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY pyproject.toml uv.lock* ./
-RUN uv pip install --no-cache -r pyproject.toml
+RUN --mount=type=cache,target=/root/.cache/uv uv pip install -r pyproject.toml
+
 
 # 4. Copy application source tree (contains src/insightshub and src/marimohub)
 COPY src/ ./src/
