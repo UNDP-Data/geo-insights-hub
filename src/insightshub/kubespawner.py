@@ -95,8 +95,9 @@ def spawn_marimo_session(
     worker_image = (
         "insights-hub:latest"
         if is_dev
-        else "undpgeohub.azurecr.io/insights-hub:latest"
+        else os.environ.get("SPAWNER_IMAGE")
     )
+
     pull_policy = "IfNotPresent" if is_dev else "Always"
     repo_url = f"https://oauth2:{user.token}@github.com/{settings.nb_github_repo}"
     internal_hub_url = "http://insights-hub-svc.hub.svc.cluster.local"

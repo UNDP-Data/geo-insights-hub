@@ -3,16 +3,6 @@ kind: Namespace
 metadata:
   name: ${NAMESPACE}
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: hub-env
-  namespace: ${NAMESPACE}
-type: Opaque
-stringData:
-  # Put your .env keys here and pass them in the 'Inject Environment Variables' step
-  # EXAMPLE_KEY: "${EXAMPLE_KEY}"
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:

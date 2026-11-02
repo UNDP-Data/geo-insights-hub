@@ -220,4 +220,5 @@ __marimo__/
 .streamlit/secrets.toml
 src/notebooks/
 depl/cert/prodcert/
+depl/cert/prodcert-geohub/
 .aider*
