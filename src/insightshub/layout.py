@@ -3,7 +3,7 @@ from insightshub import gitui
 from nicegui import ui
 from pathlib import Path
 from fastapi import Request, Response
-from insightshub.auth import User, authenticate, page_url
+from insightshub.auth import User, authenticate, page_url, sign_in_url, sign_out_url
 from insightshub.config import settings
 from contextlib import asynccontextmanager
 import logging
@@ -152,6 +152,21 @@ def _header_old(request: Request, user: User | None ) -> None:
                 _hamburger()
         #_mobile_nav(request, user, current)
 
+def _mobile_nav(request: Request, user: User | None, current: str) -> None:
+    with ui.element("div").classes("undp-mobile-nav").props('id="undp-mobile-nav"'):
+        with ui.element("ul").classes("undp-mobile-nav__links"):
+            for label, url in NAV_ITEMS:
+                with ui.element("li"):
+                    link = _link(label, url).classes("undp-cta-link")
+                    if _is_active(url, current):
+                        link.props('aria-current="page"')
+
+        with ui.element("div").classes("undp-mobile-nav__options"):
+            if user.is_authenticated:
+                ui.label(f"Signed in as {user.display_name}").classes("undp-mobile-nav__user")
+                ui.link("Sign out", sign_out_url(request))
+            else:
+                ui.link("Sign in", sign_in_url(request))
 
 def _header(request: Request, user: User | None) -> None:
     current = request.url.path
@@ -191,6 +206,8 @@ def _header(request: Request, user: User | None) -> None:
                 with ui.element("div").classes("gt-sm"):
                     _account(request, user)
                 _hamburger()
+
+        _mobile_nav(request, user, current)
 
 def _footer() -> None:
     with ui.footer(fixed=False).classes("undp-footer"):
