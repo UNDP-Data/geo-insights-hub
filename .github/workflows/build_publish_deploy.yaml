@@ -41,7 +41,6 @@ jobs:
           IMAGE_LOWER=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "full_image=${IMAGE_LOWER}:${TAG}" >> $GITHUB_OUTPUT
-      
 
       - name: Log in to the Container registry
         if: github.event_name != 'pull_request'
@@ -58,7 +57,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=${{ steps.calver.outputs.tag }},enable={{is_default_branch}}
+            type=raw,value=${{ steps.calver.outputs.tag || 'pr' }},enable={{is_default_branch}}
             type=sha
 
       - name: Build and push Docker image
@@ -86,46 +85,45 @@ jobs:
           draft: false
           skipIfReleaseExists: true
 
-#      - name: Deploy to AKS
-#        if: github.ref == 'refs/heads/main'
-#        env:
-#          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-#          IMAGE: ${{ steps.calver.outputs.full_image }}
-#          NAMESPACE: ${{ vars.NAMESPACE || 'hub' }}
-#          HOSTNAME: ${{ vars.HOSTNAME || 'insights.undpgeohub.org' }}
-#          HUB_ENV_CONTENT: ${{ secrets.HUB_ENV }}
-#        run: |
-#          # 1. Load kubeconfig from KUBE_CONFIG env var (handles both base64 and raw YAML)
-#          mkdir -p ~/.kube
-#          if printf "%s" "$KUBE_CONFIG" | base64 -d >/dev/null 2>&1; then
-#            printf "%s" "$KUBE_CONFIG" | base64 -d > ~/.kube/config
-#          else
-#            printf "%s\n" "$KUBE_CONFIG" > ~/.kube/config
-#          fi
-#          chmod 600 ~/.kube/config
-#
-#          # 2. Ensure namespace exists first, then create/update 'hub-env' Secret
-#          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-#          kubectl create secret generic hub-env \
-#            --from-env-file=<(printf "%s\n" "$HUB_ENV_CONTENT") \
-#            --from-literal=SPAWNER_IMAGE="$IMAGE" \
-#            -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-#
-#          # 3. Pipe hydrated manifest directly into kubectl (no temp files needed)
-#          envsubst < depl/hub/insights-hub-prod.yaml | kubectl apply -f -
-#
-#          # 4. Wait for rollout; grab logs and roll back automatically if it fails
-#          if ! kubectl rollout status deployment/insights-hub -n "$NAMESPACE" --timeout=90s; then
-#            echo "❌ Rollout failed! Fetching broken pod logs:"
-#            kubectl logs -l app=insights-hub -n "$NAMESPACE" --tail=50 --all-containers=true || true
-#            kubectl describe pods -l app=insights-hub -n "$NAMESPACE" | tail -n 30 || true
-#
-#            echo "⏪ Rolling back to previous stable release..."
-#            kubectl rollout undo deployment/insights-hub -n "$NAMESPACE"
-#            kubectl rollout status deployment/insights-hub -n "$NAMESPACE" --timeout=60s
-#
-#            echo "⚠️ Service restored to previous version, but failing CI job so you get notified."
-#            exit 1
-#          fi
+      - name: Deploy to AKS
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          IMAGE: ${{ steps.calver.outputs.full_image }}
+          NAMESPACE: ${{ vars.NAMESPACE || 'hub' }}
+          HOSTNAME: ${{ vars.HOSTNAME || 'insights.undpapps.org' }}
+          HUB_ENV_CONTENT: ${{ secrets.HUB_ENV }}
+        run: |
+          # 1. Load kubeconfig from KUBE_CONFIG env var (handles both base64 and raw YAML)
+          mkdir -p ~/.kube
+          if printf "%s" "$KUBE_CONFIG" | base64 -d >/dev/null 2>&1; then
+            printf "%s" "$KUBE_CONFIG" | base64 -d > ~/.kube/config
+          else
+            printf "%s\n" "$KUBE_CONFIG" > ~/.kube/config
+          fi
+          chmod 600 ~/.kube/config
 
+          # 2. Ensure namespace exists first, then create/update 'hub-env' Secret
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic hub-env \
+            --from-env-file=<(printf "%s\n" "$HUB_ENV_CONTENT" | grep -v '^SPAWNER_IMAGE=' || true) \
+            --from-literal=SPAWNER_IMAGE="$IMAGE" \
+            -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
+          # 3. Pipe hydrated manifest directly into kubectl (restricted to target variables)
+          envsubst '${NAMESPACE} ${IMAGE} ${HOSTNAME}' < depl/hub/insights-hub-prod.yaml | kubectl apply -f -
+
+          # 4. Wait for rollout; grab logs and roll back automatically if it fails
+          if ! kubectl rollout status deployment/insights-hub -n "$NAMESPACE" --timeout=90s; then
+            echo "❌ Rollout failed! Fetching broken pod logs:"
+            kubectl logs -l app=insights-hub -n "$NAMESPACE" --tail=50 --all-containers=true || true
+            kubectl describe pods -l app=insights-hub -n "$NAMESPACE" | tail -n 30 || true
+
+            echo "⏪ Rolling back to previous stable release..."
+            kubectl rollout undo deployment/insights-hub -n "$NAMESPACE"
+            kubectl rollout status deployment/insights-hub -n "$NAMESPACE" --timeout=60s
+
+            echo "⚠️ Service restored to previous version, but failing CI job so you get notified."
+            exit 1
+          fi
