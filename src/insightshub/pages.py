@@ -309,27 +309,7 @@ async def app_settings(request: Request, response: Response) -> None:
     async with standard_page(title="Settings", request=request, response=response) as user:
         ui.label('Settings').classes('text-2xl font-bold mb-4')
         ui.label(f'User Email: {user.email}')
-        ui.label(f'User token: {user.token}')
 
-
-        hostname = '.'.join(request.headers.get('host', '').split('.')[-2:])
-        ui.label(f'Hostname: {hostname}')
-
-        # Extract and analyze headers
-        headers_dict = dict(request.headers)
-        token = headers_dict.get("x-auth-request-access-token", "")
-
-        # Display token status visually
-        ui.label(f"Token Present: {bool(token)}").classes('font-bold text-lg')
-        if token:
-            ui.label(f"Token Length: {len(token)}")
-            ui.label(f"Token Preview: {token[:10]}...")
-        else:
-            ui.label("⚠️ Warning: x-auth-request-access-token header is missing!").classes('text-red-500')
-
-        # Display all headers neatly on the UI for inspection
-        ui.label('All Request Headers:').classes('font-bold mt-4')
-        ui.code(json.dumps(headers_dict, indent=2), language='json')
 
 
 @ui.page("/sessions")
