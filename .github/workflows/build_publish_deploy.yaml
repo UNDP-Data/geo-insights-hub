@@ -107,8 +107,7 @@ jobs:
           # 2. Ensure namespace exists first, then create/update 'hub-env' Secret
           kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret generic hub-env \
-            --from-env-file=<(printf "%s\n" "$HUB_ENV_CONTENT" | grep -v '^SPAWNER_IMAGE=' || true) \
-            --from-literal=SPAWNER_IMAGE="$IMAGE" \
+            --from-env-file=<(printf "%s\n" "$HUB_ENV_CONTENT" | grep -v '^SPAWNER_IMAGE=' || true; printf "SPAWNER_IMAGE=%s\n" "$IMAGE") \
             -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
           # 3. Pipe hydrated manifest directly into kubectl (restricted to target variables)
