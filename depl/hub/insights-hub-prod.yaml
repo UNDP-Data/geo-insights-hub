@@ -3,6 +3,11 @@ kind: Namespace
 metadata:
   name: ${NAMESPACE}
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: marimo
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,6 +23,8 @@ spec:
       labels:
         app: insights-hub
     spec:
+      nodeSelector:
+        type: insights
       containers:
       - name: web
         image: ${IMAGE}
@@ -83,4 +90,36 @@ subjects:
 roleRef:
   kind: Role
   name: hub-secret-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# 2. Define the permissions in the target 'marimo' namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: marimo
+  name: insightshub-spawner-role
+rules:
+  - apiGroups: ["batch", "extensions"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "pods", "pods/log"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+---
+# 3. Grant these permissions to your InsightsHub pod in ${NAMESPACE}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: insightshub-spawner-binding
+  namespace: marimo
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: ${NAMESPACE}
+roleRef:
+  kind: Role
+  name: insightshub-spawner-role
   apiGroup: rbac.authorization.k8s.io
