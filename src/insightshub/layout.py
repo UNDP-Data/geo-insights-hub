@@ -1,6 +1,6 @@
 import asyncio
 from insightshub import gitui
-from nicegui import ui, app
+from nicegui import ui
 from pathlib import Path
 from fastapi import Request, Response
 from insightshub.auth import User, authenticate, page_url

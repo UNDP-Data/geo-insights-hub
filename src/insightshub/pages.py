@@ -3,7 +3,6 @@
 from fastapi import Request, Response
 import os
 from pathlib import Path
-
 from insightshub.layout import standard_page
 from insightshub.auth import  page_url
 from insightshub import marutil as mu
@@ -12,12 +11,15 @@ from insightshub.kube_session_manager import manager
 import asyncio
 from fastapi.responses import RedirectResponse
 from urllib.parse import quote
-from nicegui import app, ui
-
+from nicegui import ui
 from insightshub.config import settings
 import json
 from insightshub import gitui
 import logging
+
+
+
+
 logger = logging.getLogger(__name__)
 
 

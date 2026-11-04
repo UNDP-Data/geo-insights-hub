@@ -3,12 +3,12 @@
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI #, Request, BackgroundTasks
+from fastapi import FastAPI
 from nicegui import app as nicegui_app
-from nicegui import ui, Client
+from nicegui import ui
 from insightshub.config import settings
 from insightshub import pages
-from insightshub.auth import CustomHeaderMiddleware, User
+from insightshub.auth import CustomHeaderMiddleware
 from kubernetes import client
 
 logging.basicConfig(level=logging.INFO)
