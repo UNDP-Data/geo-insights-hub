@@ -1,5 +1,5 @@
 import shutil
-from insightshub import utils
+import time
 import asyncio
 from nicegui import ui
 import textwrap
@@ -20,17 +20,31 @@ os.environ['NOTEBOOKS_DIR'] = str(NOTEBOOKS_DIR)
 _repo_lock = threading.Lock()
 
 
+
+# Cache dictionaries to avoid redundant network round-trips
+_public_repo_cache: dict[str, bool] = {}
+_last_sync_time: float = 0.0
+SYNC_COOLDOWN = 60  # Only check GitHub at most once every 60 seconds
+
+
 def repo_is_public(repo_name: str) -> bool:
     """
     Checks if a GitHub repo is public using GitPython without tokens.
+    Cached in memory so we only ask GitHub ONCE per server start!
     """
+    if repo_name in _public_repo_cache:
+        return _public_repo_cache[repo_name]
+
     public_url = f"https://github.com/{repo_name}.git"
     git_cmd = git.cmd.Git()
     try:
-        git_cmd.ls_remote(public_url, env={"GIT_TERMINAL_PROMPT": "0"})
-        return True
+        # Ask only for HEAD instead of all tags/branches (much faster)
+        git_cmd.ls_remote(public_url, "HEAD", env={"GIT_TERMINAL_PROMPT": "0"})
+        _public_repo_cache[repo_name] = True
     except git.exc.GitCommandError:
-        return False
+        _public_repo_cache[repo_name] = False
+
+    return _public_repo_cache[repo_name]
 
 
 def get_repo_url(user: User = None, repo_name=settings.nb_github_repo):
@@ -38,15 +52,11 @@ def get_repo_url(user: User = None, repo_name=settings.nb_github_repo):
     if repo_name.endswith('.git'):
         repo_name, _ = repo_name.split('.git')
 
-    is_public = repo_is_public(repo_name=repo_name)
-    if is_public:
-        # Public repos return the clean URL for standard checkouts
+    if repo_is_public(repo_name=repo_name):
         return f"https://github.com/{repo_name}.git"
 
-    # Private repos MUST include the token to be checked out at all
     if user and user.is_authenticated and getattr(user, 'token', None):
         return f"https://x-access-token:{user.token}@github.com/{repo_name}.git"
-        #return f"https://{user.name}:{user.token}@github.com/{repo_name}.git"
 
     return None
 
@@ -62,37 +72,58 @@ def get_push_url(user: User, repo_name=settings.nb_github_repo) -> str:
     return f"https://x-access-token:{user.token}@github.com/{repo_name}.git"
 
 
-def sync_repo(user: User = None) -> bool:
-    """Synchronizes the local notebooks directory with GitHub."""
+def sync_repo(user: User = None, force: bool = False) -> bool:
+    """Synchronizes the local notebooks directory with GitHub only when needed."""
+    global _last_sync_time
 
     git_env = {"GIT_TERMINAL_PROMPT": "0"}
     repo_url = get_repo_url(user=user)
     if repo_url is None:
-        # with caution, the user is not authenticated, repo is private, needs tor be DELETED
-        # if NOTEBOOKS_DIR.exists():
-        #     shutil.rmtree(NOTEBOOKS_DIR)
         return False
 
+    now = time.time()
+
+    # 1. FAST EXIT: If local repo exists and we checked within the last 60s, return immediately (0ms!)
+    if not force and (NOTEBOOKS_DIR / ".git").exists() and (now - _last_sync_time < SYNC_COOLDOWN):
+        return True
+
     with _repo_lock:
-        if not NOTEBOOKS_DIR.exists():
-            logger.info(f"Notebooks directory missing; performing initial clone from {repo_url}...")
-            repo = git.Repo.clone_from(repo_url, NOTEBOOKS_DIR, env=git_env)
-            repo.remote("origin").set_url(repo_url)
-        else:
-            repo = git.Repo(NOTEBOOKS_DIR)
-            origin = repo.remote("origin")
-            try:
-                origin.set_url(repo_url)
-                repo.git.pull(repo_url, "main", env=git_env)
-            finally:
-                origin.set_url(repo_url)
+        # Double-check timer after acquiring the thread lock
+        if not force and (NOTEBOOKS_DIR / ".git").exists() and (time.time() - _last_sync_time < SYNC_COOLDOWN):
+            return True
+
+        # 2. INITIAL CLONE: If folder is missing, shallow clone it
+        if not (NOTEBOOKS_DIR / ".git").exists():
+            logger.info("Notebooks directory missing; performing initial clone...")
+            git.Repo.clone_from(repo_url, NOTEBOOKS_DIR, branch="main", depth=1, env=git_env)
+            _last_sync_time = time.time()
+            return True
+
+        # 3. STRATEGY 2 (HASH CHECK): Compare Local SHA vs Remote SHA
+        repo = git.Repo(NOTEBOOKS_DIR)
+        local_sha = repo.head.commit.hexsha
+
+        # Lightweight check: get ONLY the 40-char hash of 'main' from GitHub
+        remote_out = repo.git.ls_remote(repo_url, "refs/heads/main", env=git_env)
+        remote_sha = remote_out.split()[0] if remote_out else ""
+
+        _last_sync_time = time.time()
+
+        # If hashes match, do NOTHING! Skip pulling/checking out files.
+        if remote_sha and local_sha == remote_sha:
+            logger.debug(f"Repo already up-to-date at {local_sha[:7]}. Skipping pull.")
+            return True
+
+        # 4. PULL ONLY ON CHANGE: Remote has new commits!
+        logger.info(f"New commit on GitHub ({remote_sha[:7]} != {local_sha[:7]}). Pulling changes...")
+        repo.git.pull(repo_url, "main", env=git_env)
 
     return True
 
 
-def sync_repo_task(user: User = None) -> bool:
+def sync_repo_task(user: User = None, force: bool = False) -> bool:
     try:
-        return sync_repo(user=user)
+        return sync_repo(user=user, force=force)
     except git.exc.GitCommandError as e:
         err = str(e)
         if any(msg in err for msg in
@@ -108,6 +139,7 @@ def sync_repo_task(user: User = None) -> bool:
     except Exception as e:
         logger.error(f"Unexpected error during sync_repo_task: {e}", exc_info=True)
         return False
+
 
 
 async def fetch_notebook_source(notebook_path: str, user: User = None) -> str:
