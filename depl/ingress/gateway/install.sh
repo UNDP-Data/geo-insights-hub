@@ -11,10 +11,6 @@ if [ -f "${SCRIPT_DIR}/.env" ]; then
   set +a
 fi
 
-#export CERT_SECRET_NAME="${CERT_SECRET_NAME:-wildcard-${BASE_DOMAIN//./-}-tls}"
-#export GATEWAY_NAME="${GATEWAY_NAME:-cluster-gateway}"
-#export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-default}"
-#export GATEWAY_CLASS_NAME="${GATEWAY_CLASS_NAME:-eg}"
 
 # 2. Install Envoy Gateway
 echo "==> [gateway] Installing Envoy Gateway..."

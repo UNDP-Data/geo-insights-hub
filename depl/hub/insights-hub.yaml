@@ -61,7 +61,7 @@ spec:
   - name: cluster-gateway
     namespace: default
   hostnames:
-  - "insights.undpapps.org"
+  - "insights.kind.undpapps.org"
   rules:
   - matches:
     - path:
