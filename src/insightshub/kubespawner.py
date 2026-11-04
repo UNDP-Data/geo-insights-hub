@@ -138,6 +138,13 @@ def spawn_marimo_session(
                 owner: "{sanitized_email}"
             spec:
               restartPolicy: Never
+              nodeSelector:
+                type: insights
+              tolerations:
+              - key: "dedicated"
+                operator: "Equal"
+                value: "insights"
+                effect: "NoSchedule"
               volumes:
               - name: session-workspace
                 emptyDir: {{}}
