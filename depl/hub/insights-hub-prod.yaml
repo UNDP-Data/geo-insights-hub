@@ -25,6 +25,11 @@ spec:
     spec:
       nodeSelector:
         type: insights
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "insights"
+          effect: "NoSchedule"
       containers:
       - name: web
         image: ${IMAGE}
