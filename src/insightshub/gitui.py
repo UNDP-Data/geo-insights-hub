@@ -248,7 +248,7 @@ async def open_create_notebook_dialog(current_subpath: str, user: User):
                 try:
                     await new_notebok(rel_path, user)
                     ui.notify("Syncing server...", type='info')
-                    await asyncio.to_thread(sync_repo_task, user)
+                    await asyncio.to_thread(sync_repo_task, user=user, force=True)
                     ui.navigate.reload()
                 except Exception as e:
                     logger.error(e)
@@ -307,7 +307,7 @@ def confirm_delete_notebook(notebook_path: str, notebook_name: str, user: User):
                 ui.notify(f"Deleting {notebook_name}...", type='warning')
                 try:
                     await delete_notebook_git(notebook_path, user)
-                    await asyncio.to_thread(sync_repo_task, user)
+                    await asyncio.to_thread(sync_repo_task, user=user, force=True)
                     ui.notify(f"Successfully deleted {notebook_name}", type='positive')
                     ui.navigate.reload()
                 except Exception as e:
@@ -372,7 +372,7 @@ def confirm_delete_folder(folder_path: str, folder_name: str, user: User):
                     if local_target.exists() and local_target.is_dir():
                         shutil.rmtree(local_target, ignore_errors=True)
 
-                    await asyncio.to_thread(sync_repo_task, user)
+                    await asyncio.to_thread(sync_repo_task, user=user, force=True)
                     ui.notify(f"Successfully deleted {folder_name}", type='positive')
                     ui.navigate.reload()
                 except Exception as e:
