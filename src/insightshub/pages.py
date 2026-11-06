@@ -93,26 +93,15 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
 
         with ui.column().classes('w-full max-w-7xl mx-auto px-6 lg:px-8'):
+            # --- TOP HEADER BAR ---
+            with ui.row().classes('w-full flex justify-between items-center mb-8'):
 
-            # 3. Breadcrumbs / "Back" Navigation
-            if subpath:
-                parent_path = Path(subpath).parent
-                # Navigate back: if parent is '.', go to root '/'
-                back_url = '/' if str(parent_path) == '.' else f'/apps/{parent_path}'
-
-                with ui.column().classes('w-full max-w-7xl mx-auto px-6 lg:px-8'):
-
-                    # --- TOP HEADER BAR: Back (Left) | Title (Center/Flow) | New (Right) ---
-                    with ui.row().classes('w-full justify-between items-center mb-8'):
-
-                        # 1. Back to Parent Link (Far Left Edge)
-                        if subpath:
-                            parent_path = Path(subpath).parent
-                            back_url = '/' if str(parent_path) == '.' else f'/apps/{parent_path}'
-                            back_label = str(parent_path) if str(parent_path) != '.' else 'Apps'
-                        else:
-                            back_url = '/'
-                            back_label = 'Apps'
+                # 1. LEFT SIDE: Back Button (Takes 1/3 width to balance layout)
+                with ui.element('div').classes('flex-1 flex justify-start'):
+                    if subpath:
+                        parent_path = Path(subpath).parent
+                        back_url = '/' if str(parent_path) == '.' else f'/apps/{parent_path}'
+                        back_label = str(parent_path) if str(parent_path) != '.' else 'Apps'
 
                         with ui.row().classes('items-center cursor-pointer group').on('click',
                                                                                       lambda: ui.navigate.to(back_url)):
@@ -120,40 +109,41 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                 'group-hover:-translate-x-1 transition-transform text-lg')
                             ui.label(f"Back to {back_label}").classes(
                                 'text-[#006eb5] font-bold text-xs tracking-widest uppercase ml-1')
-                        with ui.column().classes('w-fit mx-auto items-center'):
-                            ui.label(current_dir.name.replace('_', ' ').capitalize()).classes(
-                                'text-2xl font-bold text-black uppercase tracking-tight whitespace-nowrap'
+
+                # 2. CENTER: Title (Perfectly centered)
+                with ui.element('div').classes('flex-1 flex flex-col items-center'):
+                    title_label = current_dir.name.replace('_', ' ').capitalize() if subpath else "Apps"
+                    ui.label(title_label).classes(
+                        'text-2xl font-bold text-black uppercase tracking-tight whitespace-nowrap')
+                    ui.element('div').classes('w-full h-1 bg-[#006db0] mt-1')
+
+                # 3. RIGHT SIDE: Action Buttons (Pinned to right)
+                with ui.element('div').classes('flex-1 flex justify-end gap-3'):
+                    if can_edit:
+                        ui.button(
+                            'New',
+                            icon='add',
+                            color='negative',
+                            on_click=lambda e: gitui.open_create_notebook_dialog(
+                                current_subpath=subpath,
+                                user=user,
                             )
-                            ui.element('div').classes('w-full h-1 bg-[#006db0] mt-1')
+                        ).classes(
+                            'undp-button text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
 
-                        # 2. New Button (Far Right Edge)
-                        if can_edit:
-                            with ui.row():
-                                ui.button(
-                                    'New',
-                                    icon='add',
-                                    color='negative',
-                                    on_click=lambda e: gitui.open_create_notebook_dialog(
-                                        current_subpath=subpath,
-                                        user=user,
-                                    )
-                                ).classes(
-                                    'undp-button text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
+                        async def handle_manual_sync():
+                            ui.notify("Pulling latest changes from GitHub...", type="info")
+                            await asyncio.to_thread(gitui.sync_repo_task, user)
+                            ui.notify("Sync complete!", type="positive")
+                            ui.navigate.reload()
 
-                                async def handle_manual_sync():
-                                    ui.notify("Pulling latest changes from GitHub...", type="info")
-                                    # Run the blocking git pull in a background thread
-                                    await asyncio.to_thread(gitui.sync_repo_task, user)
-                                    ui.notify("Sync complete!", type="positive")
-                                    ui.navigate.reload()
-
-                                ui.button(
-                                    'Sync',
-                                    icon='sync',
-                                    color='blue-grey',
-                                    on_click=handle_manual_sync
-                                ).classes(
-                                    'undp-button text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
+                        ui.button(
+                            'Sync',
+                            icon='sync',
+                            color='blue-grey',
+                            on_click=handle_manual_sync
+                        ).classes(
+                            'undp-button text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
 
             # 4. The Grid
             with ui.grid(columns='1fr 1fr 1fr').classes('w-full gap-10 items-stretch'):
