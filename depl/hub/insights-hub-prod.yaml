@@ -108,7 +108,7 @@ rules:
     resources: ["jobs"]
     verbs: ["create", "get", "list", "watch", "delete"]
   - apiGroups: [""]
-    resources: ["services", "pods", "pods/log"]
+    resources: ["services", "pods", "pods/log", "persistentvolumeclaims"]
     verbs: ["create", "get", "list", "watch", "delete"]
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["httproutes"]
