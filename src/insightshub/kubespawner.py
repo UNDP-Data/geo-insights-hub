@@ -81,16 +81,22 @@ async def resolve_dependencies_interactively(missing_imports: list[str], status_
     return verified_packages
 
 
+import os
+import uuid
+import yaml
+import textwrap
+from urllib.parse import urlparse
+from kubernetes import client, config
+
 
 def spawn_marimo_session(
-    notebook_path: str,
-    mode: str = "run",
-    namespace: str = "marimo",
-    user: User = None,
-    parent_url: str = None,
-    missing_packages: list[str] = None,
+        notebook_path: str,
+        mode: str = "run",
+        namespace: str = "marimo",
+        user: User = None,
+        parent_url: str = None,
+        missing_packages: list[str] = None,
 ):
-    # Check if the container was built with --build-arg dev=true
     is_dev = os.getenv("DEV_MODE", "false").lower() == "true"
     worker_image = (
         "insights-hub:latest"
@@ -107,6 +113,7 @@ def spawn_marimo_session(
     batch_v1 = client.BatchV1Api(k8s_client)
     core_v1 = client.CoreV1Api(k8s_client)
     custom_api = client.CustomObjectsApi(k8s_client)
+
     parent_url_str = str(parent_url)
     parsed_url = urlparse(parent_url_str)
     host = parsed_url.netloc
@@ -114,6 +121,7 @@ def spawn_marimo_session(
         hostname = '.'.join(host.split('.')[-2:])
     else:
         hostname = host
+
     session_id = uuid.uuid4().hex[:8]
     resource_name = f"marimo-{mode}-{session_id}"
     session_hostname = f"{session_id}.{hostname}"
@@ -123,7 +131,7 @@ def spawn_marimo_session(
         apiVersion: batch/v1
         kind: Job
         metadata:
-          name: placeholder-name
+          name: {resource_name}
           annotations:
             marimo.io/notebook-path: "{notebook_path}"
             marimo.io/hostname: "{session_hostname}"
@@ -134,102 +142,131 @@ def spawn_marimo_session(
             metadata:
               labels:
                 app: marimo-worker
-                session: placeholder-session
+                session: {session_id}
                 owner: "{sanitized_email}"
             spec:
               restartPolicy: Never
               nodeSelector:
                 type: insights
               tolerations:
-              - key: "dedicated"
-                operator: "Equal"
-                value: "insights"
-                effect: "NoSchedule"
+                - key: "dedicated"
+                  operator: "Equal"
+                  value: "insights"
+                  effect: "NoSchedule"
               volumes:
-              - name: session-workspace
-                emptyDir: {{}}
+                # 1. Workspace volume (Empty for now, we will inject PVC or emptyDir in Python)
+                - name: session-workspace
+                # 2. Heavy Data Volume (Node-local persistence via hostPath)
+                - name: session-data
+                  hostPath:
+                    path: /data/{user.name}
+                    type: DirectoryOrCreate
               initContainers:
-              - name: fetch-notebooks
-                image: alpine/git:latest
-                command: ["/bin/sh", "-c"]
-                args:
-                - |
-                  rm -rf /workspace/* && \
-                  git clone --no-checkout --depth 1 {repo_url} /workspace && \
-                  cd /workspace && \
-                  git sparse-checkout set "{notebook_path}" && \
-                  git checkout
-                volumeMounts:
-                - name: session-workspace
-                  mountPath: /workspace
+                - name: fetch-notebooks
+                  image: alpine/git:latest
+                  command: ["/bin/sh", "-c"]
+                  args:
+                    - |
+                      # CRASH GUARD: Check if repository is already initialized
+                      if [ -d "/workspace/.git" ] || [ -f "/workspace/{notebook_path}" ]; then
+                        echo "Crash recovery detected: Workspace already exists."
+                        echo "Skipping git clone to preserve uncommitted user changes."
+                        exit 0
+                      fi
+
+                      echo "Initializing fresh workspace..."
+                      rm -rf /workspace/*
+                      git clone --no-checkout --depth 1 {repo_url} /workspace
+                      cd /workspace
+                      git sparse-checkout set "{notebook_path}"
+                      git checkout
+                  volumeMounts:
+                    - name: session-workspace
+                      mountPath: /workspace
               containers:
-              - name: marimo
-                image: {worker_image}
-                imagePullPolicy: {pull_policy}
-                ports:
-                - containerPort: 8080
-                resources:
-                  requests:
-                    memory: "1Gi"
-                    cpu: "500m"
-                  limits:
-                    memory: "6G"
-                    cpu: "3800m"
-                volumeMounts:
-                - name: session-workspace
-                  mountPath: /workspace
+                - name: marimo
+                  image: {worker_image}
+                  imagePullPolicy: {pull_policy}
+                  ports:
+                    - containerPort: 8080
+                  resources:
+                    requests:
+                      memory: "1Gi"
+                      cpu: "500m"
+                    limits:
+                      memory: "6G"
+                      cpu: "3800m"
+                  volumeMounts:
+                    - name: session-workspace
+                      mountPath: /workspace
+                    - name: session-data
+                      mountPath: /data
+        ---
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: {resource_name}-pvc
+          labels:
+            owner: "{sanitized_email}"
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
         ---
         apiVersion: v1
         kind: Service
         metadata:
-          name: placeholder-name
+          name: {resource_name}
           labels:
             owner: "{sanitized_email}"
         spec:
           selector:
-            session: placeholder-session
+            session: {session_id}
           ports:
-          - port: 80
-            targetPort: 8080
+            - port: 80
+              targetPort: 8080
         ---
         apiVersion: gateway.networking.k8s.io/v1
         kind: HTTPRoute
         metadata:
-          name: placeholder-name
+          name: {resource_name}
           labels:
             owner: "{sanitized_email}"
         spec:
           parentRefs:
-          - name: cluster-gateway
-            namespace: default
+            - name: cluster-gateway
+              namespace: default
           hostnames:
-          - placeholder-hostname
+            - {session_hostname}
           rules:
-          - matches:
-            - path:
-                type: PathPrefix
-                value: /
-            backendRefs:
-            - name: placeholder-name
-              port: 80
+            - matches:
+                - path:
+                    type: PathPrefix
+                    value: /
+              backendRefs:
+                - name: {resource_name}
+                  port: 80
         """)
 
-    job_dict, svc_dict, route_dict = list(yaml.safe_load_all(yaml_template))
+    job_dict, pvc_dict, svc_dict, route_dict = list(yaml.safe_load_all(yaml_template))
 
-    # 1. Configure Job
-    job_dict["metadata"]["name"] = resource_name
-    job_dict["spec"]["template"]["metadata"]["labels"]["session"] = session_id
     if not is_dev:
-        job_dict["spec"]["template"]["spec"]["nodeSelector"] = {
-            "type": "insights"
-        }
+        job_dict["spec"]["template"]["spec"]["nodeSelector"] = {"type": "insights"}
 
+    # ==========================================
+    # DYNAMIC MODE CONFIGURATION
+    # ==========================================
     if mode == "edit":
+        # Configure Edit Mode (Requires PVC for saving code)
+        job_dict["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"] = {
+            "claimName": f"{resource_name}-pvc"}
+
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [
-            "python3","-m", "marimohub.mrun", "edit", f"/workspace/{notebook_path}",
+            "python3", "-m", "marimohub.mrun", "edit", f"/workspace/{notebook_path}",
             "--host", "0.0.0.0", "--port", "8080", "--headless", "--no-token"
         ]
-        # 1. Base session and Git identity variables
         session_env_vars = [
             {"name": "SESSION_ID", "value": session_id},
             {"name": "BRANCH_NAME", "value": session_id},
@@ -237,18 +274,17 @@ def spawn_marimo_session(
             {"name": "NOTEBOOK_REL_PATH", "value": notebook_path},
             {"name": "PARENT_HUB_URL", "value": parent_url_str},
             {"name": "HUB_CALLBACK_URL", "value": f"{internal_hub_url}/api/sessions"},
-            # Standard Git CLI identity
             {"name": "GIT_AUTHOR_NAME", "value": str(user.name)},
             {"name": "GIT_AUTHOR_EMAIL", "value": str(user.email)},
             {"name": "GIT_COMMITTER_NAME", "value": str(user.name)},
             {"name": "GIT_COMMITTER_EMAIL", "value": str(user.email)},
-            # Clean, quote-stripped GitHub credentials from Pydantic settings
             {"name": "NB_GITHUB_TOKEN", "value": user.token},
             {"name": "NB_GITHUB_REPO", "value": settings.nb_github_repo},
         ]
-
     else:
-        # Format the verified packages into a single comma-separated string
+        # Configure Run Mode (Ephemeral code workspace, NO PVC)
+        job_dict["spec"]["template"]["spec"]["volumes"][0]["emptyDir"] = {}
+
         missing_pkgs_str = ",".join(missing_packages) if missing_packages else ""
         session_env_vars = [{"name": "MISSING_PACKAGES", "value": missing_pkgs_str}]
 
@@ -256,37 +292,33 @@ def spawn_marimo_session(
             "python3", "-m", "marimohub.mrun", "run", f"/workspace/{notebook_path}",
             "--host", "0.0.0.0", "--port", "8080", "--redirect-console-to-browser"
         ]
+
     job_dict["spec"]["template"]["spec"]["containers"][0]["env"] = session_env_vars
 
-    # Submit Job first to acquire the cluster-generated UID
+    # 1. Submit Job
     created_job = batch_v1.create_namespaced_job(namespace=namespace, body=job_dict)
     job_uid = created_job.metadata.uid
 
-    # 2. Build ownerReference pointing to the created Job
-    owner_reference = [
-        {
-            "apiVersion": "batch/v1",
-            "kind": "Job",
-            "name": resource_name,
-            "uid": job_uid,
-            "blockOwnerDeletion": True,
-            "controller": True,
-        }
-    ]
+    owner_reference = [{
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "name": resource_name,
+        "uid": job_uid,
+        "blockOwnerDeletion": True,
+        "controller": True,
+    }]
 
-    # 3. Configure and create Service
-    svc_dict["metadata"]["name"] = resource_name
+    # 2. Submit PVC (ONLY if we are in Edit Mode)
+    if mode == "edit":
+        pvc_dict["metadata"]["ownerReferences"] = owner_reference
+        core_v1.create_namespaced_persistent_volume_claim(namespace=namespace, body=pvc_dict)
+
+    # 3. Submit Service
     svc_dict["metadata"]["ownerReferences"] = owner_reference
-    svc_dict["spec"]["selector"]["session"] = session_id
-
     core_v1.create_namespaced_service(namespace=namespace, body=svc_dict)
 
-    # 4. Configure and create HTTPRoute
-    route_dict["metadata"]["name"] = resource_name
+    # 4. Submit HTTPRoute
     route_dict["metadata"]["ownerReferences"] = owner_reference
-    route_dict["spec"]["hostnames"][0] = session_hostname
-    route_dict["spec"]["rules"][0]["backendRefs"][0]["name"] = resource_name
-
     custom_api.create_namespaced_custom_object(
         group="gateway.networking.k8s.io",
         version="v1",
