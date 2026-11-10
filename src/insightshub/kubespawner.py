@@ -211,6 +211,7 @@ def spawn_marimo_session(
         spec:
           accessModes:
             - ReadWriteOnce
+          storageClassName: "azurefile-csi"
           resources:
             requests:
               storage: 1Gi
