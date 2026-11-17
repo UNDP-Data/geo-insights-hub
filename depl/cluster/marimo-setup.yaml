@@ -15,7 +15,7 @@ rules:
   resources: ["jobs"]
   verbs: ["create", "get", "list", "watch", "delete"]
 - apiGroups: [""]
-  resources: ["services", "pods"]
+  resources: ["services", "pods","pods/log", "persistentvolumeclaims"]
   verbs: ["create", "get", "list", "watch", "delete"]
 
 # This is the section added for the Gateway API (HTTPRoute)

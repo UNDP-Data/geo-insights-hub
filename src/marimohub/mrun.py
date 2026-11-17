@@ -169,26 +169,36 @@ def install_notebook_deps(packages: list[str]):
 
 if __name__ == "__main__":
     import os
+
     name = os.path.basename(os.path.abspath(__file__))
     logger = logging.getLogger(name)
+
     if len(sys.argv) > 1:
         command = sys.argv[1]
+
+        # 1. Universal dependency installation (Runs for BOTH edit and run)
+        missing_pkgs_env = os.environ.get("MISSING_PACKAGES", "").strip()
+        if missing_pkgs_env:
+            logger.info(f'Attempting to install missing packages: {missing_pkgs_env}')
+            pkg_list = [p.strip() for p in missing_pkgs_env.split(",") if p.strip()]
+            install_notebook_deps(pkg_list)
+
+        # 2. Command branching
         if command == "edit":
             apply_marimo_patches()
             from marimo._cli.cli import main
+
             main()
+
         elif command == "run":
-            notebook_path = sys.argv[2] if len(sys.argv) > 2 else ""
-            missing_pkgs_env = os.environ.get("MISSING_PACKAGES", "").strip()
-            logger.error(f'Attempting to install {missing_pkgs_env}')
-            if missing_pkgs_env:
-                pkg_list = [p.strip() for p in missing_pkgs_env.split(",") if p.strip()]
-                install_notebook_deps(pkg_list)
             from marimo._cli.cli import main
+
             main()
+
         else:
-            logger.info("Error: accept only run or edit.")
+            logger.error("Error: accept only run or edit.")
             sys.exit(1)
+
     else:
-        logger.info("Error: accept only run or edit.")
+        logger.error("Error: accept only run or edit.")
         sys.exit(1)

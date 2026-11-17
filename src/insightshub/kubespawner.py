@@ -116,9 +116,16 @@ def spawn_marimo_session(
 
     parent_url_str = str(parent_url)
     parsed_url = urlparse(parent_url_str)
-    host = parsed_url.netloc
-    if '.' in host:
-        hostname = '.'.join(host.split('.')[-2:])
+    # Extract dynamic scheme (http for local KinD, https for prod)
+    scheme = parsed_url.scheme if parsed_url.scheme else "http"
+
+    # Extract host and strip port if present
+    host = parsed_url.netloc.split(":")[0]
+
+    parts = host.split('.')
+    # Drop ONLY the first subdomain (e.g., insights.kind.undpapps.org -> kind.undpapps.org)
+    if len(parts) > 2:
+        hostname = '.'.join(parts[1:])
     else:
         hostname = host
 
@@ -142,17 +149,10 @@ def spawn_marimo_session(
             metadata:
               labels:
                 app: marimo-worker
-                session: {session_id}
+                session: "{session_id}"
                 owner: "{sanitized_email}"
             spec:
               restartPolicy: Never
-              nodeSelector:
-                type: insights
-              tolerations:
-                - key: "dedicated"
-                  operator: "Equal"
-                  value: "insights"
-                  effect: "NoSchedule"
               volumes:
                 # 1. Workspace volume (Empty for now, we will inject PVC or emptyDir in Python)
                 - name: session-workspace
@@ -211,7 +211,7 @@ def spawn_marimo_session(
         spec:
           accessModes:
             - ReadWriteOnce
-          storageClassName: "azurefile-csi"
+          #storageClassName: "azurefile-csi" need to be set dynamically as azurefile-csi does not existy in kind
           resources:
             requests:
               storage: 1Gi
@@ -224,7 +224,7 @@ def spawn_marimo_session(
             owner: "{sanitized_email}"
         spec:
           selector:
-            session: {session_id}
+            session: "{session_id}"
           ports:
             - port: 80
               targetPort: 8080
@@ -252,9 +252,29 @@ def spawn_marimo_session(
         """)
 
     job_dict, pvc_dict, svc_dict, route_dict = list(yaml.safe_load_all(yaml_template))
+    missing_pkgs_str = ",".join(missing_packages) if missing_packages else ""
 
-    if not is_dev:
+    # ==========================================
+    # ENVIRONMENT-SPECIFIC CONFIGURATION
+    # ==========================================
+    if is_dev:
+        # Tell KinD to use its local disk provisioner
+        pvc_dict["spec"]["storageClassName"] = "standard"
+    else:
+        # Tell AKS to provision an Azure file share and schedule on specific nodes
+        pvc_dict["spec"]["storageClassName"] = "azurefile-csi"
+
+        # Apply production node affinity and tolerations
         job_dict["spec"]["template"]["spec"]["nodeSelector"] = {"type": "insights"}
+        job_dict["spec"]["template"]["spec"]["tolerations"] = [
+            {
+                "key": "dedicated",
+                "operator": "Equal",
+                "value": "insights",
+                "effect": "NoSchedule"
+            }
+        ]
+
 
     # ==========================================
     # DYNAMIC MODE CONFIGURATION
@@ -281,12 +301,12 @@ def spawn_marimo_session(
             {"name": "GIT_COMMITTER_EMAIL", "value": str(user.email)},
             {"name": "NB_GITHUB_TOKEN", "value": user.token},
             {"name": "NB_GITHUB_REPO", "value": settings.nb_github_repo},
+            {"name": "MISSING_PACKAGES", "value": missing_pkgs_str}
         ]
     else:
         # Configure Run Mode (Ephemeral code workspace, NO PVC)
         job_dict["spec"]["template"]["spec"]["volumes"][0]["emptyDir"] = {}
 
-        missing_pkgs_str = ",".join(missing_packages) if missing_packages else ""
         session_env_vars = [{"name": "MISSING_PACKAGES", "value": missing_pkgs_str}]
 
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [
@@ -450,7 +470,7 @@ async def handle_session_launch(notebook_path: str, mode: str, namespace: str = 
         # 2. Build the INTERNAL K8s Service URL (Service routes port 80 -> pod 8080)
         internal_url = f"http://{resource_name}.{namespace}.svc.cluster.local:80"
 
-        max_retries = 90  # 90 seconds total timeout
+        max_retries = 300  # 5 min seconds total timeout
         pod_is_ready = False
 
         # 3. Clean Polling Loop
