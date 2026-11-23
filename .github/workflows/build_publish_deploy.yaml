@@ -91,7 +91,12 @@ jobs:
     needs: build-and-push-image
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: insights-hub
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        environment: [ insights-hub, care-atlas ]
+    environment: ${{ matrix.environment }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
