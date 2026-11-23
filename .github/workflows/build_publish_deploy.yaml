@@ -21,6 +21,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+    outputs:
+      full_image: ${{ steps.calver.outputs.full_image }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -85,16 +87,40 @@ jobs:
           draft: false
           skipIfReleaseExists: true
 
+  deploy:
+    needs: build-and-push-image
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: insights-hub
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Deploy to AKS
-        if: github.ref == 'refs/heads/main'
         shell: bash
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-          IMAGE: ${{ steps.calver.outputs.full_image }}
-          NAMESPACE: ${{ vars.NAMESPACE || 'hub' }}
-          HOSTNAME: ${{ vars.HOSTNAME || 'insights.undpapps.org' }}
-          HUB_ENV_CONTENT: ${{ secrets.HUB_ENV }}
+          IMAGE: ${{ needs.build-and-push-image.outputs.full_image }}
+          NAMESPACE: ${{ vars.NAMESPACE }}
+          HOSTNAME: ${{ vars.HOSTNAME }}
+          APP_NAME: ${{ vars.APP_NAME }}
+          HEADER_LABEL: ${{ vars.HEADER_LABEL }}
+          NB_GITHUB_REPO: ${{ vars.NB_GITHUB_REPO }}
+          PRIVATE_AUTH_URL: ${{ vars.PRIVATE_AUTH_URL }}
+          PUBLIC_AUTH_URL: ${{ vars.PUBLIC_AUTH_URL }}
+          OAUTH_COOKIE_SECRET: ${{ secrets.OAUTH_COOKIE_SECRET }}
+          STORAGE_SECRET: ${{ secrets.STORAGE_SECRET }}
         run: |
+          set -euo pipefail
+
+          # 0. Fail fast if any required variable or secret is missing
+          for v in KUBE_CONFIG IMAGE NAMESPACE HOSTNAME APP_NAME HEADER_LABEL NB_GITHUB_REPO PRIVATE_AUTH_URL PUBLIC_AUTH_URL OAUTH_COOKIE_SECRET STORAGE_SECRET; do
+            if [ -z "${!v}" ]; then
+              echo "❌ Missing required variable/secret: $v"
+              exit 1
+            fi
+          done
+
           # 1. Load kubeconfig from KUBE_CONFIG env var (handles both base64 and raw YAML)
           mkdir -p ~/.kube
           if printf "%s" "$KUBE_CONFIG" | base64 -d >/dev/null 2>&1; then
@@ -107,7 +133,14 @@ jobs:
           # 2. Ensure namespace exists first, then create/update 'hub-env' Secret
           kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret generic hub-env \
-            --from-env-file=<(printf "%s\n" "$HUB_ENV_CONTENT" | grep -v '^SPAWNER_IMAGE=' || true; printf "SPAWNER_IMAGE=%s\n" "$IMAGE") \
+            --from-literal="APP_NAME=${APP_NAME}" \
+            --from-literal="HEADER_LABEL=${HEADER_LABEL}" \
+            --from-literal="NB_GITHUB_REPO=${NB_GITHUB_REPO}" \
+            --from-literal="PRIVATE_AUTH_URL=${PRIVATE_AUTH_URL}" \
+            --from-literal="PUBLIC_AUTH_URL=${PUBLIC_AUTH_URL}" \
+            --from-literal="OAUTH_COOKIE_SECRET=${OAUTH_COOKIE_SECRET}" \
+            --from-literal="STORAGE_SECRET=${STORAGE_SECRET}" \
+            --from-literal="SPAWNER_IMAGE=${IMAGE}" \
             -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
           # 3. Pipe hydrated manifest directly into kubectl (restricted to target variables)

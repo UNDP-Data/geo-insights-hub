@@ -118,7 +118,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: insightshub-spawner-binding
+  name: insightshub-spawner-binding-${NAMESPACE}
   namespace: marimo
 subjects:
   - kind: ServiceAccount
