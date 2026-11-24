@@ -24,16 +24,21 @@ spec:
         app: insights-hub
     spec:
       nodeSelector:
-        type: insights
+        agentpool: kubesys
       tolerations:
-        - key: "dedicated"
-          operator: "Equal"
-          value: "insights"
-          effect: "NoSchedule"
+        - key: "CriticalAddonsOnly"
+          operator: "Exists"
       containers:
       - name: web
         image: ${IMAGE}
         imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
         envFrom:
           - secretRef:
               name: hub-env
