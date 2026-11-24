@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source the .env file relative to the script directory
 . "$SCRIPT_DIR/.env"
 
+echo "Deleting Marimo shared storage"
+kubectl delete -f "$SCRIPT_DIR/marimo-kind-shared-storage.yaml"
+
 echo "Deleting Marimo namespace and RBAC role"
 kubectl delete -f "$SCRIPT_DIR/marimo-setup.yaml"
 

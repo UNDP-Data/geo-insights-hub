@@ -12,4 +12,9 @@ kind create cluster --name $CLUSTER_NAME --config "$SCRIPT_DIR/dev-cluster.yaml"
 kubectl config get-contexts
 
 # create marimo ns and rbac
+echo "Deleting Marimo namespace and RBAC"
 kubectl apply -f "$SCRIPT_DIR/marimo-setup.yaml"
+
+# create marimo shared PV and PVC
+echo "Creating Marimo shared storage"
+kubectl apply -f "$SCRIPT_DIR/marimo-kind-shared-storage.yaml"

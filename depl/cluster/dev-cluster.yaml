@@ -6,7 +6,11 @@ nodes:
   extraMounts:
   - hostPath: /home/work/py/geo-insights-hub/src
     containerPath: /app/src
+  - hostPath: /data
+    containerPath: /shared
 - role: worker
   extraMounts:
   - hostPath: /home/work/py/geo-insights-hub/src
     containerPath: /app/src
+  - hostPath: /data
+    containerPath: /shared

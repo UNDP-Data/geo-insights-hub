@@ -316,6 +316,19 @@ def spawn_marimo_session(
 
     job_dict["spec"]["template"]["spec"]["containers"][0]["env"] = session_env_vars
 
+    # ==========================================
+    # SHARED DATA VOLUME (KinD & AKS, Edit & Run)
+    # ==========================================
+    job_dict["spec"]["template"]["spec"]["volumes"].append({
+        "name": "shared-data",
+        "persistentVolumeClaim": {"claimName": "pvc-shared-data"},
+    })
+    job_dict["spec"]["template"]["spec"]["containers"][0].setdefault("volumeMounts", []).append({
+        "name": "shared-data",
+        "mountPath": "/app/shared",
+    })
+
+
     # 1. Submit Job
     created_job = batch_v1.create_namespaced_job(namespace=namespace, body=job_dict)
     job_uid = created_job.metadata.uid
