@@ -191,8 +191,8 @@ def spawn_marimo_session(
                     - containerPort: 8080
                   resources:
                     requests:
-                      memory: "1Gi"
-                      cpu: "500m"
+                      memory: "4Gi"
+                      cpu: "2500m"
                     limits:
                       memory: "6G"
                       cpu: "3800m"
