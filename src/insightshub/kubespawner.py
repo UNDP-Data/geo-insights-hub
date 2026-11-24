@@ -326,6 +326,7 @@ def spawn_marimo_session(
     job_dict["spec"]["template"]["spec"]["containers"][0].setdefault("volumeMounts", []).append({
         "name": "shared-data",
         "mountPath": "/app/shared",
+        "readOnly": mode != "edit"
     })
 
 
