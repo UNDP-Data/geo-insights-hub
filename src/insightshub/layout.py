@@ -1,10 +1,13 @@
 import asyncio
+import os
+
 from insightshub import gitui
 from nicegui import ui
 from pathlib import Path
 from fastapi import Request, Response
 from insightshub.auth import User, authenticate, page_url, sign_in_url, sign_out_url
 from insightshub.config import settings
+from insightshub.utils import get_md_pages
 from contextlib import asynccontextmanager
 import logging
 from urllib.parse import quote
@@ -17,12 +20,12 @@ UNDP_BLUE = "#006eb5"
 UNDP_RED = "#d12800"
 STATIC_DIR = Path(__file__).parent / "static"
 ASSETS = "/static/undp"
-REPO_URL = "https://github.com/UNDP-Data/geo-careatlas"
+REPO_URL = "https://github.com/UNDP-Data/geo-insights-hub"
 
 NAV_ITEMS = [
     ("Apps", "/"),
-    ("Datasets", "/datasets"),
-    ("Docs", "/docs"),
+    #("Datasets", "/datasets"),
+    #("Docs", "/docs"),
     ("Settings", "/settings"),
 
 ]
@@ -193,7 +196,13 @@ def _header(request: Request, user: User | None) -> None:
                 # Because it's locked in this wrapper, it will NEVER move when you log in/out.
                 with ui.element("nav").classes("undp-menu gt-sm").style(
                         "margin-left: 8rem !important; display: flex; gap: 2rem;"):
-                    for label, url in NAV_ITEMS:
+
+                    md_nav_items = [
+                        (slug.replace("-", " ").title(), f"/pages/{slug}")
+                        for slug in get_md_pages()
+                    ]
+
+                    for label, url in md_nav_items+NAV_ITEMS:
                         link = _link(label, url).classes("undp-menu__link")
                         if _is_active(url, current):
                             link.classes("undp-menu__link--active").props('aria-current="page"')
@@ -246,6 +255,7 @@ async def standard_page(title: str = None, request: Request = None, response: Re
 
     # Trigger Git sync using the user
     await asyncio.to_thread(gitui.sync_repo_task, user)
+
 
     load_theme()
     _header(request=request, user=user)

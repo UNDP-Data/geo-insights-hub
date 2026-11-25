@@ -13,7 +13,7 @@ from fastapi.responses import RedirectResponse
 from urllib.parse import quote
 from nicegui import ui
 from insightshub.config import settings
-import json
+from insightshub.utils import get_md_pages
 from insightshub import gitui
 import logging
 
@@ -431,4 +431,16 @@ async def auth_bounce(action: str, rd: str, request: Request, response:Response,
 async def datasets(request:Request, response:Response)->None:
 
     async with standard_page(title="Datasets", request=request, response=response) as user:
-        ui.label(f'Most useful datasets for {user.email}')
+        ui.label(f'Most useful datasets for {user.email} JUSSI')
+
+@ui.page("/pages/{slug}")
+async def md_page(slug: str, request:Request, response:Response) -> None:
+    async with standard_page(title=slug.capitalize(), request=request, response=response) as user:
+        pass
+        path = get_md_pages().get(slug)
+        if path is None:
+            ui.label("Page not found").classes("text-h6")
+            return
+
+        content = path.read_text(encoding="utf-8")
+        ui.markdown(content, extras=["fenced-code-blocks", "tables"])
