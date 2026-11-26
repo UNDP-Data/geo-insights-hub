@@ -15,6 +15,7 @@ from nicegui import ui
 from insightshub.config import settings
 from insightshub.utils import get_md_pages
 from insightshub import gitui
+from insightshub.utils import is_marimo_notebook
 import logging
 
 
@@ -23,13 +24,37 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_HOME_MD = """
+# Welcome to Insights Hub
+
+<p style="font-size: 1.35rem; line-height: 1.65; color: #55606e; max-width: 56rem;">
+  <strong style="color: #000;">Insights Hub</strong> is UNDP’s interactive platform for turning data into sustainable development insights—spanning poverty, economic recovery, climate modeling, and geospatial analysis. Launch ready-to-use data apps and reactive Python notebooks directly in your browser on on-demand cloud compute, with no local setup required.
+</p>
+"""
+
+
+def _find_md_page(slug: str) -> Path | None:
+    """Case-insensitive lookup in get_md_pages()."""
+    target = slug.lower()
+    for key, path in get_md_pages().items():
+        if key.lower() == target:
+            return path
+    return None
 
 
 @ui.page("/")
-@ui.page('/apps/{subpath:path}')
-async def home(request: Request, response:Response,  subpath: str = "") -> None:
+async def home(request: Request, response: Response) -> None:
+    async with standard_page(title="Insights Hub", request=request, response=response) as user:
+        home_md = _find_md_page("home")
+        content = home_md.read_text(encoding="utf-8") if home_md else DEFAULT_HOME_MD
+        ui.markdown(content, extras=["fenced-code-blocks", "tables"])
 
-    async with standard_page(title="Apps", request=request, response=response) as user:
+
+@ui.page("/notebooks")
+@ui.page('/notebooks/{subpath:path}')
+async def notebooks(request: Request, response:Response,  subpath: str = "") -> None:
+
+    async with standard_page(title="Notebooks", request=request, response=response) as user:
 
 
         # 1. Traversal protection
@@ -100,8 +125,8 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                 with ui.element('div').classes('flex-1 flex justify-start'):
                     if subpath:
                         parent_path = Path(subpath).parent
-                        back_url = '/' if str(parent_path) == '.' else f'/apps/{parent_path}'
-                        back_label = str(parent_path) if str(parent_path) != '.' else 'Apps'
+                        back_url = '/notebooks' if str(parent_path) == '.' else f'/notebooks/{parent_path}'
+                        back_label = str(parent_path) if str(parent_path) != '.' else 'Notebooks'
 
                         with ui.row().classes('items-center cursor-pointer group').on('click',
                                                                                       lambda: ui.navigate.to(back_url)):
@@ -111,11 +136,13 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                                 'text-[#006eb5] font-bold text-xs tracking-widest uppercase ml-1')
 
                 # 2. CENTER: Title (Perfectly centered)
-                with ui.element('div').classes('flex-1 flex flex-col items-center'):
-                    title_label = current_dir.name.replace('_', ' ').capitalize() if subpath else "Apps"
+                with ui.element('div').classes('flex-1 flex items-center justify-center'):
+                    title_label = current_dir.name.replace('_', ' ').capitalize() if subpath else "Notebooks"
                     ui.label(title_label).classes(
-                        'text-2xl font-bold text-black uppercase tracking-tight whitespace-nowrap')
-                    ui.element('div').classes('w-full h-1 bg-[#006db0] mt-1')
+                        'text-2xl font-bold text-black uppercase tracking-wide whitespace-nowrap '
+                        'border-l-4 border-[#0468B1] pl-3 leading-none'
+                    )
+                    #ui.element('div').classes('w-full h-1 bg-[#006db0] mt-1')
 
                 # 3. RIGHT SIDE: Action Buttons (Pinned to right)
                 with ui.element('div').classes('flex-1 flex justify-end gap-3'):
@@ -146,7 +173,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                             'undp-button text-white font-bold py-1.5 px-4 rounded shadow-sm text-sm uppercase tracking-wider')
 
             # 4. The Grid
-            with ui.grid(columns='1fr 1fr 1fr').classes('w-full gap-10 items-stretch'):
+            with ui.grid(columns='1fr 1fr 1fr').classes('w-full mt-20 gap-10 items-stretch'):
                 items = [
                     item for item in current_dir.iterdir()
                     if not item.name.startswith('.') and item.name != "__init__.py"
@@ -162,13 +189,13 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                     # FOLDER / APP CARD
                     # ==========================================
                     if item.is_dir():
-                        if '__' in item.name:
+                        if '__' in item.name or item.name.startswith('_'):
                             continue
 
                         with ui.column().classes(
                                 'w-full border-t-2 border-black p-3 flex flex-col justify-between h-full '
                                 'bg-white hover:bg-[#006eb5] transition-all duration-200 cursor-pointer group hover:scale-102 transition'
-                        ).on('click', lambda p=rel_path: ui.navigate.to(f'/apps/{p}')):
+                        ).on('click', lambda p=rel_path: ui.navigate.to(f'/notebooks/{p}')):
 
                             with ui.column().classes('w-full gap-4'):
                                 with ui.row().classes('w-full items-center justify-between -mt-2'):
@@ -202,7 +229,7 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
 
                             # 4. CTA Link
                             with ui.row().classes('items-center gap-1.5 mt-8'):
-                                ui.link('Explore', f'/apps/{rel_path}').classes("undp-cta-link")
+                                ui.link('Explore', f'/notebooks/{rel_path}').classes("undp-cta-link")
 
 
 
@@ -210,6 +237,8 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
                     # NOTEBOOK / ARTICLE CARD
                     # ==========================================
                     elif item.suffix == '.py':
+                        if not is_marimo_notebook(item.absolute()):
+                            continue
 
                         descr = mu.get_global_metadata(str(item.absolute()))
 
@@ -298,7 +327,8 @@ async def home(request: Request, response:Response,  subpath: str = "") -> None:
 async def app_settings(request: Request, response: Response) -> None:
     async with standard_page(title="Settings", request=request, response=response) as user:
         ui.label('Settings').classes('text-2xl font-bold mb-4')
-        ui.label(f'User Email: {user.email}')
+        ui.label(f'User email: {user.email}')
+        ui.label(f'User groups: {user.groups}')
 
 
 
@@ -419,28 +449,28 @@ async def session_manager(request: Request, response: Response) -> None:
 async def auth_bounce(action: str, rd: str, request: Request, response:Response, ):
     """Silently clears the cookie and redirects in a single network hop."""
 
-    async with standard_page(title="bounce", request=request, response=response) as user:
-        # 2. Construct the auth proxy URL
-        target_host = settings.public_auth_url
-        final_url = f"{target_host}/{action}?rd={quote(rd, safe=':/%?=&')}"
-        # 3. Instantly redirect the browser (No UI is rendered)
-        return RedirectResponse(final_url)
+    # async with standard_page(title="bounce", request=request, response=response) as user:
+    # 2. Construct the auth proxy URL
+    target_host = settings.public_auth_url
+    final_url = f"{target_host}/{action}?rd={quote(rd, safe=':/%?=&')}"
+    # 3. Instantly redirect the browser (No UI is rendered)
+    return RedirectResponse(final_url)
 
-@ui.page('/datasets')
+#@ui.page('/datasets')
 
-async def datasets(request:Request, response:Response)->None:
+# async def datasets(request:Request, response:Response)->None:
+#
+#     async with standard_page(title="Datasets", request=request, response=response) as user:
+#         ui.label(f'Most useful datasets for {user.email}')
+#
 
-    async with standard_page(title="Datasets", request=request, response=response) as user:
-        ui.label(f'Most useful datasets for {user.email} JUSSI')
+@ui.page("/{slug}")
+async def md_page(slug: str, request: Request, response: Response) -> None:
 
-@ui.page("/pages/{slug}")
-async def md_page(slug: str, request:Request, response:Response) -> None:
-    async with standard_page(title=slug.capitalize(), request=request, response=response) as user:
-        pass
-        path = get_md_pages().get(slug)
-        if path is None:
-            ui.label("Page not found").classes("text-h6")
-            return
+    path = _find_md_page(slug)
+    if path is None:
+        return Response(status_code=404)
 
+    async with standard_page(title=slug.replace("-", " ").title(), request=request, response=response) as user:
         content = path.read_text(encoding="utf-8")
         ui.markdown(content, extras=["fenced-code-blocks", "tables"])
