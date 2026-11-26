@@ -1,5 +1,5 @@
 import asyncio
-import os
+
 
 from insightshub import gitui
 from nicegui import ui
@@ -8,6 +8,7 @@ from fastapi import Request, Response
 from insightshub.auth import User, authenticate, page_url, sign_in_url, sign_out_url
 from insightshub.config import settings
 from insightshub.utils import get_md_pages
+from insightshub.server import nicegui_app
 from contextlib import asynccontextmanager
 import logging
 from urllib.parse import quote
@@ -23,12 +24,26 @@ ASSETS = "/static/undp"
 REPO_URL = "https://github.com/UNDP-Data/geo-insights-hub"
 
 NAV_ITEMS = [
-    ("Apps", "/"),
-    #("Datasets", "/datasets"),
-    #("Docs", "/docs"),
+    ("Home", "/"),
+    ("Notebooks", "/notebooks"),
     ("Settings", "/settings"),
 
 ]
+
+
+RESERVED_SLUGS = set([e[0].lower() for e in NAV_ITEMS])
+
+
+def _build_nav_items() -> list[tuple[str, str]]:
+
+    extra_md = [
+        (slug.replace("-", " ").replace("_", " ").title(), f"/{slug}")
+        for slug in get_md_pages()
+        if slug.lower() not in RESERVED_SLUGS
+    ]
+    # Order: Home, Apps, <custom repo .md pages>, Settings
+    return [NAV_ITEMS[0], *extra_md, *NAV_ITEMS[1:]]
+
 
 FOOTER_LINKS = [
     ("About UNDP", "https://www.undp.org/about-us"),
@@ -158,7 +173,7 @@ def _header_old(request: Request, user: User | None ) -> None:
 def _mobile_nav(request: Request, user: User | None, current: str) -> None:
     with ui.element("div").classes("undp-mobile-nav").props('id="undp-mobile-nav"'):
         with ui.element("ul").classes("undp-mobile-nav__links"):
-            for label, url in NAV_ITEMS:
+            for label, url in _build_nav_items():
                 with ui.element("li"):
                     link = _link(label, url).classes("undp-cta-link")
                     if _is_active(url, current):
@@ -197,12 +212,7 @@ def _header(request: Request, user: User | None) -> None:
                 with ui.element("nav").classes("undp-menu gt-sm").style(
                         "margin-left: 8rem !important; display: flex; gap: 2rem;"):
 
-                    md_nav_items = [
-                        (slug.replace("-", " ").title(), f"/pages/{slug}")
-                        for slug in get_md_pages()
-                    ]
-
-                    for label, url in md_nav_items+NAV_ITEMS:
+                    for label, url in _build_nav_items():
                         link = _link(label, url).classes("undp-menu__link")
                         if _is_active(url, current):
                             link.classes("undp-menu__link--active").props('aria-current="page"')
@@ -249,7 +259,7 @@ async def standard_page(title: str = None, request: Request = None, response: Re
     """A reusable layout with a header, main content area, and footer."""
 
     # 1. Always try extracting/authenticating fresh from the current request first
-    user = await authenticate( url=settings.private_auth_url,request=request, response=response,forward_headers=True)
+    user = await authenticate( url=settings.private_auth_url,request=request, response=response,forward_headers=False)
     logger.debug(f'User: {user.email} in {title}')
 
 
