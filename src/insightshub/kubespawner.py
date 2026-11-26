@@ -132,6 +132,7 @@ def spawn_marimo_session(
     session_id = uuid.uuid4().hex[:8]
     resource_name = f"marimo-{mode}-{session_id}"
     session_hostname = f"{session_id}.{hostname}"
+    final_url = f"{scheme}://{session_hostname}"
     sanitized_email = user.email.replace("@", "-").replace(".", "-")
 
     yaml_template = textwrap.dedent(f"""\
@@ -286,7 +287,7 @@ def spawn_marimo_session(
 
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [
             "python3", "-m", "marimohub.mrun", "edit", f"/workspace/{notebook_path}",
-            "--host", "0.0.0.0", "--port", "8080", "--headless", "--no-token"
+            "--host", "0.0.0.0", "--port", "8080", "--headless", "--no-token", "--allow-origins", final_url
         ]
         session_env_vars = [
             {"name": "SESSION_ID", "value": session_id},
@@ -311,9 +312,9 @@ def spawn_marimo_session(
 
         job_dict["spec"]["template"]["spec"]["containers"][0]["command"] = [
             "python3", "-m", "marimohub.mrun", "run", f"/workspace/{notebook_path}",
-            "--host", "0.0.0.0", "--port", "8080", "--redirect-console-to-browser"
+            "--host", "0.0.0.0", "--port", "8080", "--redirect-console-to-browser", "--allow-origins", final_url
         ]
-
+    session_env_vars += [{'name':'FORWARDED_ALLOW_IPS', 'value':"*"}]
     job_dict["spec"]["template"]["spec"]["containers"][0]["env"] = session_env_vars
 
     # ==========================================
@@ -362,7 +363,7 @@ def spawn_marimo_session(
         body=route_dict,
     )
 
-    final_url = f"https://{session_hostname}"
+
     logger.info(f"Provisioned resources for {resource_name} at {final_url} (Job UID: {job_uid})")
 
     return session_id, final_url, resource_name

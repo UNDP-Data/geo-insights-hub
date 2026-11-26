@@ -200,5 +200,5 @@ if __name__ == "__main__":
             sys.exit(1)
 
     else:
-        logger.error("Error: accept only run or edit.")
+        logger.error("Error: accepts only run or edit.")
         sys.exit(1)
