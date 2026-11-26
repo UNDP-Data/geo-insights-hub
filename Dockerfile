@@ -37,5 +37,5 @@ ENV PYTHONPATH=/app/src:/app
 ARG dev=false
 ENV DEV_MODE=${dev}
 
-CMD ["sh", "-c", "if [ \"$DEV_MODE\" = \"true\" ]; then exec uvicorn insightshub.server:app --host 0.0.0.0 --port 80 --reload --reload-dir /app/src; else exec uvicorn insightshub.server:app --host 0.0.0.0 --port 80; fi"]
+CMD ["sh", "-c", "if [ \"$DEV_MODE\" = \"true\" ]; then exec uvicorn insightshub.server:app --host 0.0.0.0 --port 80 --reload --reload-dir /app/src --proxy-headers --forwarded-allow-ips=\"*\" ; else exec uvicorn insightshub.server:app --host 0.0.0.0 --port 80 --proxy-headers --forwarded-allow-ips=\"*\"; fi"]
 
